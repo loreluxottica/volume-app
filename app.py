@@ -538,6 +538,46 @@ app.clientside_callback(
 )
 
 
+# ── TEMPORARY: DB connectivity probe ──────────────────────────────────────────
+# Diagnostic route only — runs as the app service principal, so it tells us
+# whether the SP can actually read/write Unity Catalog in the deployed app.
+# REMOVE this block once connectivity is confirmed.
+
+@server.route("/dbcheck")
+def _dbcheck():
+    import traceback
+    from flask import jsonify
+    from data import db
+
+    steps: list[str] = []
+    try:
+        week = db.get_current_week()
+        steps.append(f"read weeks OK: {week}")
+        wk = int(week["week_id"])
+
+        db.save_draft(
+            wk, "_DBCHECK_", "_DBCHECK_", "dbcheck", "test",
+            {"PROBE": 0.0}, {"PROBE": False},
+            {"PROBE": {"presets": [], "others": "in-app probe"}},
+        )
+        steps.append("write drafts OK")
+
+        back = db.get_draft(wk, "_DBCHECK_", "_DBCHECK_", "test", "dbcheck")
+        steps.append(f"read-back OK: {len(back)} row(s)")
+
+        db.delete_draft(wk, "_DBCHECK_", "_DBCHECK_", "test", "dbcheck")
+        steps.append("cleanup OK")
+
+        return jsonify({"ok": True, "steps": steps})
+    except Exception as exc:
+        return jsonify({
+            "ok": False,
+            "steps": steps,
+            "error": str(exc),
+            "trace": traceback.format_exc(),
+        }), 500
+
+
 # ── Run ───────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
