@@ -1,5 +1,10 @@
+# Databricks App command. The HTTP path for the SQL Warehouse must be
+# configured in the app environment settings so `data/db.py` can connect.
 command:
   - gunicorn
   - app:server
   - -c
   - gunicorn.conf.py
+
+env:
+  DATABRICKS_HTTP_PATH: "/sql/1.0/warehouses/2663c9a13af5c078"

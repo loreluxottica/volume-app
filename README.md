@@ -49,6 +49,13 @@ databricks repos update /Workspace/Users/lorenzo.muscillo@luxottica.com/volume-a
 databricks apps deploy dataretrival --source-code-path /Workspace/Users/lorenzo.muscillo@luxottica.com/volume-app
 ```
 
+Se usi il deploy diretto dalla UI `From Git`, il repository è già nella root, quindi:
+- `Git reference` = `main` o `dev` (a seconda del branch che vuoi usare)
+- `Reference type` = `Branch`
+- `Source code path` = lascia vuoto
+
+Assicurati anche che Databricks abbia una Git credential valida per GitHub (token/PAT con almeno `repo` e, se serve, `read:org`).
+
 App URL: https://dataretrival-8661566820370235.15.azure.databricksapps.com
 
 ## Branch strategy
@@ -93,18 +100,40 @@ letta da `DATABRICKS_APP_PORT` con bind `0.0.0.0` in `gunicorn.conf.py`.
 Per leggere/scrivere su Delta Lake serve impostare a mano `DATABRICKS_HTTP_PATH`
 (HTTP path del SQL Warehouse) nelle env var dell'app — non ancora configurato.
 
+## Test DB connectivity
+
+Per verificare la connessione e la scrittura sul DB puoi usare lo script:
+
+```powershell
+python .\scripts\test_db.py
+```
+
+Prima di eseguirlo, imposta le variabili di ambiente:
+
+```powershell
+$env:DATABRICKS_HOST = "https://<your-databricks-host>"
+$env:DATABRICKS_HTTP_PATH = "<your-sql-warehouse-http-path>"
+$env:DATABRICKS_TOKEN = "<your-databricks-token>"
+$env:TEST_WEEK_ID = "<open-week-id>"
+$env:TEST_SITE = "<site>"
+$env:TEST_PRODUCT_LINE = "<product-line>"
+```
+
+Lo script salva un draft di test nella tabella `drafts` e lo cancella subito dopo.
+Se la scrittura fallisce, vedrai l'errore restituito dalla connessione SQL.
+
 ## Schema Delta Lake atteso
 
-Tabelle in Unity Catalog sotto `gli.volumes.*`:
+Tabelle in Unity Catalog sotto `sbx-logistics.volume-data-entry-app`:
 
 ```sql
--- gli.volumes.weeks
-CREATE TABLE gli.volumes.weeks (
+-- `sbx-logistics`.`volume-data-entry-app`.weeks
+CREATE TABLE `sbx-logistics`.`volume-data-entry-app`.weeks (
   week_id INT, year INT, created_at TIMESTAMP, is_open BOOLEAN
 );
 
--- gli.volumes.submissions (append-only — mai UPDATE/DELETE)
-CREATE TABLE gli.volumes.submissions (
+-- `sbx-logistics`.`volume-data-entry-app`.submissions (append-only — mai UPDATE/DELETE)
+CREATE TABLE `sbx-logistics`.`volume-data-entry-app`.submissions (
   submission_id STRING, timestamp TIMESTAMP, week_id INT, site STRING,
   product_line STRING, user_id STRING, submission_type STRING, channel STRING,
   value_kpcs DOUBLE, is_zero_flagged BOOLEAN, official_log BOOLEAN,
@@ -112,19 +141,19 @@ CREATE TABLE gli.volumes.submissions (
   ref_submission_id STRING
 );
 
--- gli.volumes.drafts (sovrascritta a ogni Save — NON append-only)
-CREATE TABLE gli.volumes.drafts (
+-- `sbx-logistics`.`volume-data-entry-app`.drafts (sovrascritta a ogni Save — NON append-only)
+CREATE TABLE `sbx-logistics`.`volume-data-entry-app`.drafts (
   draft_id STRING, saved_at TIMESTAMP, week_id INT, site STRING,
   product_line STRING, user_id STRING, submission_type STRING, channel STRING,
   value_kpcs DOUBLE, is_zero_flagged BOOLEAN, comment_preset STRING,
   comment_other STRING
 );
 
--- gli.volumes.gli_extract (view — ultimo valore ufficiale per chiave)
-CREATE VIEW gli.volumes.gli_extract AS
+-- `sbx-logistics`.`volume-data-entry-app`.gli_extract (view — ultimo valore ufficiale per chiave)
+CREATE VIEW `sbx-logistics`.`volume-data-entry-app`.gli_extract AS
 SELECT week_id, site, product_line, submission_type,
        channel, value_kpcs, comment_preset, comment_other
-FROM gli.volumes.submissions
+FROM `sbx-logistics`.`volume-data-entry-app`.submissions
 WHERE official_log = TRUE;
 ```
 
