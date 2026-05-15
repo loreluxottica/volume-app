@@ -7,15 +7,18 @@ import os
 import uuid
 import sys
 from dataclasses import dataclass
+from pathlib import Path
+
+# Allow running as `python scripts/test_db.py`: put the repo root (parent of
+# this file's folder) on sys.path so the `data` package is importable.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from data import db
 
 
 @dataclass
 class Config:
-    host: str
     http_path: str
-    token: str
     week_id: int
     site: str
     product_line: str
@@ -23,37 +26,43 @@ class Config:
 
 
 def load_config() -> Config:
-    missing = []
-    def get_env(name: str, default: str | None = None) -> str:
-        value = os.environ.get(name, default)
-        if value is None:
-            missing.append(name)
-        return value
+    """
+    Build the test config from the environment.
 
-    host = get_env("DATABRICKS_HOST")
-    http_path = get_env("DATABRICKS_HTTP_PATH")
-    token = get_env("DATABRICKS_TOKEN")
-    week_id = get_env("TEST_WEEK_ID")
-    site = get_env("TEST_SITE", "test-site")
-    product_line = get_env("TEST_PRODUCT_LINE", "test-product-line")
-    user_id = get_env("TEST_USER_ID", f"test-user-{uuid.uuid4().hex[:8]}")
+    Auth is NOT read here — data/db.py resolves credentials via
+    databricks.sdk.Config. Set either DATABRICKS_HOST + DATABRICKS_TOKEN
+    (a PAT), or DATABRICKS_CONFIG_PROFILE to reuse a CLI-authenticated profile.
+    """
+    missing = []
+
+    def require(name: str) -> str:
+        value = os.environ.get(name)
+        if not value:
+            missing.append(name)
+        return value or ""
+
+    def optional(name: str, default: str) -> str:
+        return os.environ.get(name) or default
+
+    http_path    = require("DATABRICKS_HTTP_PATH")
+    week_id      = require("TEST_WEEK_ID")
+    site         = optional("TEST_SITE", "test-site")
+    product_line = optional("TEST_PRODUCT_LINE", "test-product-line")
+    user_id      = optional("TEST_USER_ID", f"test-user-{uuid.uuid4().hex[:8]}")
 
     if missing:
         raise SystemExit(
-            "Missing environment variables: " + ", ".join(missing) +
-            ".\nPlease set DATABRICKS_HOST, DATABRICKS_HTTP_PATH, DATABRICKS_TOKEN, and optionally TEST_WEEK_ID, TEST_SITE, TEST_PRODUCT_LINE."
-        )
-
-    if week_id is None:
-        raise SystemExit(
-            "Missing environment variable TEST_WEEK_ID. "
-            "Set TEST_WEEK_ID to the open week_id you want to test against."
+            "Missing environment variables: " + ", ".join(missing) + "\n"
+            "Required:\n"
+            "  DATABRICKS_HTTP_PATH  — SQL Warehouse HTTP path or warehouse id\n"
+            "  TEST_WEEK_ID          — an open week_id to test against\n"
+            "Auth (db.py resolves it via databricks.sdk.Config):\n"
+            "  DATABRICKS_HOST + DATABRICKS_TOKEN (a PAT), or\n"
+            "  DATABRICKS_CONFIG_PROFILE to use a CLI-authenticated profile."
         )
 
     return Config(
-        host=host,
         http_path=http_path,
-        token=token,
         week_id=int(week_id),
         site=site,
         product_line=product_line,

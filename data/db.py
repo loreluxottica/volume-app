@@ -12,8 +12,12 @@
 #         — file storage (exports, uploads, ...)
 #
 # Connection is established lazily on first query and reused across requests.
-# In Databricks Apps the DATABRICKS_HOST and DATABRICKS_TOKEN env vars are
-# injected automatically; DATABRICKS_HTTP_PATH must be set manually.
+# Auth is resolved by databricks.sdk.Config from the environment:
+#   - locally:  DATABRICKS_HOST + DATABRICKS_TOKEN (a personal access token)
+#   - in-app:   DATABRICKS_HOST + DATABRICKS_CLIENT_ID/DATABRICKS_CLIENT_SECRET
+#               (OAuth M2M for the app service principal — injected by
+#               Databricks Apps; no PAT is provided in that environment)
+# DATABRICKS_HTTP_PATH must be set in either case (see app.yaml for the app).
 # ─────────────────────────────────────────────────────────────────────────────
 
 from __future__ import annotations
@@ -25,6 +29,7 @@ from typing import Any
 
 import pandas as pd
 from databricks import sql
+from databricks.sdk.core import Config
 
 # ── Unity Catalog location ────────────────────────────────────────────────────
 # Catalog and schema names contain hyphens, so they must be backtick-quoted
@@ -43,15 +48,40 @@ VOLUME_PATH = "/Volumes/sbx-logistics/volume-data-entry-app/app_volume"
 # ── Connection ────────────────────────────────────────────────────────────────
 
 _conn: sql.client.Connection | None = None
+_cfg: Config | None = None
+
+
+def _config() -> Config:
+    """Databricks auth config — auto-detects PAT or OAuth M2M from the env."""
+    global _cfg
+    if _cfg is None:
+        _cfg = Config()
+    return _cfg
+
+
+def _server_hostname(cfg: Config) -> str:
+    """Bare hostname for the SQL connector — Config.host carries the scheme."""
+    return cfg.host.removeprefix("https://").removeprefix("http://").rstrip("/")
+
+
+def _http_path() -> str:
+    """
+    SQL Warehouse HTTP path. When DATABRICKS_HTTP_PATH is bound to a
+    `sql_warehouse` app resource via `valueFrom`, Databricks Apps inject the
+    warehouse *id* (not the full path) — so accept either form.
+    """
+    raw = os.environ["DATABRICKS_HTTP_PATH"].strip()
+    return raw if raw.startswith("/") else f"/sql/1.0/warehouses/{raw}"
 
 
 def _get_conn() -> sql.client.Connection:
     global _conn
     if _conn is None:
+        cfg = _config()
         _conn = sql.connect(
-            server_hostname=os.environ["DATABRICKS_HOST"],
-            http_path=os.environ["DATABRICKS_HTTP_PATH"],   # SQL Warehouse HTTP path
-            access_token=os.environ["DATABRICKS_TOKEN"],
+            server_hostname=_server_hostname(cfg),
+            http_path=_http_path(),
+            credentials_provider=lambda: cfg.authenticate,
         )
     return _conn
 
