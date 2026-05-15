@@ -2,7 +2,7 @@
 # configured in the app environment settings so `data/db.py` can connect.
 command:
   - gunicorn
-  - app:server
+  - "app:server"
   - -c
   - gunicorn.conf.py
 
