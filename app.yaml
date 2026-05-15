@@ -7,4 +7,5 @@ command:
   - gunicorn.conf.py
 
 env:
-  DATABRICKS_HTTP_PATH: "/sql/1.0/warehouses/2663c9a13af5c078"
+  - name: DATABRICKS_HTTP_PATH
+    valueFrom: sql-warehouse
