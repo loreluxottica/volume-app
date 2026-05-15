@@ -9,7 +9,7 @@ from datetime import datetime
 
 from dash import html
 
-from data.schema import SITES, SITE_OWNERS
+from data.schema import SITES
 
 
 def render_topbar(username: str = "Lorenzo Muscillo") -> html.Div:
@@ -42,12 +42,11 @@ def render_app_header(
     months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
     today_str = f"{days[now.weekday()]} {now.day} {months[now.month-1]} {now.year}"
 
-    # Site options: own site first, others read-only
-    site_options = []
-    for s in SITES:
-        owner = SITE_OWNERS[s]
-        label = f"{s} — {owner}" + ("  (my site)" if s == current_site else "  [read only]")
-        site_options.append(html.Option(label, value=s, selected=(s == current_site)))
+    # Site options: plant name only (table-level access is enforced backend-side)
+    site_options = [
+        html.Option(s, value=s, selected=(s == current_site))
+        for s in SITES
+    ]
 
     header = html.Div(className="app-header", children=[
         html.Div(className="header-left", children=[

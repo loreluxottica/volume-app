@@ -36,8 +36,8 @@ COLS_BY_PL = {
 
 # Rows shared across both product lines
 ROWS = [
-    {"id": "py",      "label": "PY",           "is_ref": True,  "is_fri": False},
-    {"id": "siop",    "label": "SIOP",          "is_ref": True,  "is_fri": False},
+    {"id": "py",      "label": "PY",           "is_ref": False, "is_fri": False},
+    {"id": "siop",    "label": "SIOP",          "is_ref": False, "is_fri": False},
     {"id": "mon_frc", "label": "Monday FRC",    "is_ref": False, "is_fri": False},
     {"id": "thu_frc", "label": "Thursday FRC",  "is_ref": False, "is_fri": False},
     {"id": "fri_frc", "label": "Friday FRC",    "is_ref": False, "is_fri": True},

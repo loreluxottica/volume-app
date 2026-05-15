@@ -48,9 +48,19 @@ app = dash.Dash(
 server = app.server
 
 # DEV STUBS — in production these come from the Databricks user identity.
-OWN_SITE  = "SEDICO"
+OWN_SITE  = "SEDICO"          # site shown on load
 USER_ID   = "dev-user"
 USER_NAME = "Lorenzo Muscillo"
+
+# TEST MODE: every site is editable for everyone. Per-table access is enforced
+# in the backend (Unity Catalog grants). Set this False once per-user site
+# permissions exist, so users may only edit their own site.
+EDIT_ALL_SITES = True
+
+
+def _can_edit(site: str) -> bool:
+    """Whether the current user may edit the given site."""
+    return EDIT_ALL_SITES or site == OWN_SITE
 
 
 # ── Current week ──────────────────────────────────────────────────────────────
@@ -123,7 +133,6 @@ def _load_slice(state: dict, site: str, pl: str) -> None:
         return
     week    = CURRENT_WEEK["week_id"]
     col_ids = {c["id"] for c in COLS_BY_PL[pl]}
-    is_own  = site == OWN_SITE
 
     try:
         latest = db.get_latest_submissions(week, site, pl)
@@ -139,11 +148,11 @@ def _load_slice(state: dict, site: str, pl: str) -> None:
         state["submitted"][site][pl][rid]   = True
         if _truthy(r["is_zero_flagged"]):
             state["zero_flags"][site][pl][rid][cid] = True
-        if is_own and rid == "fri_frc":
-            _apply_comment(state["fri_comments"][pl], cid, r)
+        if rid == "fri_frc":
+            _apply_comment(state["fri_comments"][site][pl], cid, r)
 
-    # Drafts exist only for the user's own site.
-    if is_own:
+    # Drafts are loaded for sites the user can edit.
+    if _can_edit(site):
         try:
             drafts = db.get_drafts(week, site, pl, USER_ID)
         except Exception as exc:
@@ -161,7 +170,7 @@ def _load_slice(state: dict, site: str, pl: str) -> None:
                 if _truthy(r["is_zero_flagged"]):
                     state["zero_flags"][site][pl][rid][cid] = True
                 if rid == "fri_frc":
-                    _apply_comment(state["fri_comments"][pl], cid, r)
+                    _apply_comment(state["fri_comments"][site][pl], cid, r)
 
     state["loaded"].append(key)
 
@@ -180,7 +189,7 @@ def _db_payload(state: dict, site: str, pl: str, row_id: str):
         zero_flags[cid] = bool(zf.get(cid, False))
     comments: dict = {}
     if row_id == "fri_frc":
-        for cid, fc in state["fri_comments"][pl].items():
+        for cid, fc in state["fri_comments"][site][pl].items():
             comments[cid] = {
                 "presets": fc.get("presets", []),
                 "others":  fc.get("others", ""),
@@ -202,24 +211,22 @@ def _empty_state() -> dict:
         "submitted":      {},   # {site: {pl: {row_id: bool}}}
         "drafted":        {},   # {site: {pl: {row_id: bool}}}
         "zero_flags":     {},   # {site: {pl: {row_id: {col_id: bool}}}}
-        "fri_comments":   {},   # {pl: {col_id: {presets:[], others:""}}}
+        "fri_comments":   {},   # {site: {pl: {col_id: {presets:[], others:""}}}}
         "loaded":         [],   # ["site|pl", ...] slices fetched from the DB
     }
     for s in SITES:
-        state["values"][s]     = {}
-        state["submitted"][s]  = {}
-        state["drafted"][s]    = {}
-        state["zero_flags"][s] = {}
+        state["values"][s]       = {}
+        state["submitted"][s]    = {}
+        state["drafted"][s]      = {}
+        state["zero_flags"][s]   = {}
+        state["fri_comments"][s] = {}
         for pl in ["FRAMES", "WEARABLES"]:
             cols = COLS_BY_PL[pl]
-            state["values"][s][pl]     = {r["id"]: {c["id"]: "" for c in cols} for r in ROWS}
-            state["submitted"][s][pl]  = {r["id"]: False for r in ROWS}
-            state["drafted"][s][pl]    = {r["id"]: False for r in ROWS}
-            state["zero_flags"][s][pl] = {r["id"]: {c["id"]: False for c in cols} for r in ROWS}
-
-    for pl in ["FRAMES", "WEARABLES"]:
-        cols = COLS_BY_PL[pl]
-        state["fri_comments"][pl] = {c["id"]: {"presets": [], "others": ""} for c in cols}
+            state["values"][s][pl]       = {r["id"]: {c["id"]: "" for c in cols} for r in ROWS}
+            state["submitted"][s][pl]    = {r["id"]: False for r in ROWS}
+            state["drafted"][s][pl]      = {r["id"]: False for r in ROWS}
+            state["zero_flags"][s][pl]   = {r["id"]: {c["id"]: False for c in cols} for r in ROWS}
+            state["fri_comments"][s][pl] = {c["id"]: {"presets": [], "others": ""} for c in cols}
 
     # Pre-load the default view (own site, Frames) from the DB.
     _load_slice(state, OWN_SITE, "FRAMES")
@@ -258,12 +265,12 @@ app.layout = html.Div([
 def render_ui(state: dict):
     site      = state["site"]
     pl        = state["pl"]
-    is_ro     = site != OWN_SITE
+    is_ro     = not _can_edit(site)
     submitted = state["submitted"][site][pl]
     drafted   = state["drafted"][site][pl]
     values    = state["values"][site][pl]
     zf        = state["zero_flags"][site][pl]
-    fc        = state["fri_comments"][pl]
+    fc        = state["fri_comments"][site][pl]
     fri_open  = state["fri_open"]
     sa        = state["submit_attempted"]
 
@@ -379,9 +386,9 @@ def update_fri_values(fri_vals, fri_zeros, fri_presets, fri_others, state: dict)
             if is_zero:
                 state["values"][site][pl]["fri_frc"][col_id] = "0"
         elif t == "fri-presets":
-            state["fri_comments"][pl][col_id]["presets"] = val or []
+            state["fri_comments"][site][pl][col_id]["presets"] = val or []
         elif t == "fri-others":
-            state["fri_comments"][pl][col_id]["others"] = val or ""
+            state["fri_comments"][site][pl][col_id]["others"] = val or ""
 
     return state
 
@@ -560,7 +567,7 @@ def submit_fri(n1, n2, state: dict):
         return state, "⚠ Enter at least one value before submitting."
 
     # Check comment requirements
-    fc = state["fri_comments"][pl]
+    fc = state["fri_comments"][site][pl]
     below_ids: list[str] = []
     for col in cols:
         cid = col["id"]
