@@ -86,18 +86,48 @@ def _get_conn() -> sql.client.Connection:
     return _conn
 
 
+def _reset_conn() -> None:
+    """Drop the cached connection so the next call reconnects."""
+    global _conn
+    try:
+        if _conn is not None:
+            _conn.close()
+    except Exception:
+        pass
+    _conn = None
+
+
 def _exec(query: str, params: list | None = None) -> pd.DataFrame:
-    """Execute a SELECT and return a DataFrame."""
-    with _get_conn().cursor() as cur:
-        cur.execute(query, params or [])
-        cols = [d[0] for d in cur.description]
-        return pd.DataFrame(cur.fetchall(), columns=cols)
+    """
+    Execute a SELECT and return a DataFrame. Reconnects once on failure: the
+    SQL Warehouse auto-stops after idle time, which drops the cached
+    connection — a read is safe to retry.
+    """
+    for attempt in (1, 2):
+        try:
+            with _get_conn().cursor() as cur:
+                cur.execute(query, params or [])
+                cols = [d[0] for d in cur.description]
+                return pd.DataFrame(cur.fetchall(), columns=cols)
+        except Exception:
+            _reset_conn()
+            if attempt == 2:
+                raise
+    raise RuntimeError("unreachable")
 
 
 def _run(query: str, params: list | None = None) -> None:
-    """Execute an INSERT/UPDATE with no return value."""
-    with _get_conn().cursor() as cur:
-        cur.execute(query, params or [])
+    """
+    Execute an INSERT/UPDATE with no return value. On failure the cached
+    connection is dropped (so the next call reconnects) but the statement is
+    NOT retried automatically, to avoid a double-write.
+    """
+    try:
+        with _get_conn().cursor() as cur:
+            cur.execute(query, params or [])
+    except Exception:
+        _reset_conn()
+        raise
 
 
 # ── weeks ─────────────────────────────────────────────────────────────────────
@@ -236,6 +266,27 @@ def get_draft(week_id: int, site: str, product_line: str,
           AND user_id = ?
         """,
         [week_id, site, product_line, submission_type, user_id],
+    )
+
+
+def get_drafts(week_id: int, site: str, product_line: str,
+               user_id: str) -> pd.DataFrame:
+    """
+    Return every draft row for a (week, site, product_line, user) in one
+    query — one row per (submission_type, channel). Used to load all drafts
+    of a slice at once.
+    """
+    return _exec(
+        f"""
+        SELECT submission_type, channel, value_kpcs, is_zero_flagged,
+               comment_preset, comment_other
+        FROM {_T_DRAFTS}
+        WHERE week_id = ?
+          AND site = ?
+          AND product_line = ?
+          AND user_id = ?
+        """,
+        [week_id, site, product_line, user_id],
     )
 
 

@@ -24,11 +24,13 @@ from dash import Input, Output, State, ctx, dcc, html, ALL, MATCH
 
 from components.header import render_topbar, render_app_header
 from components.data_table import render_data_table
+from data import db
 from data.schema import (
     ROWS, COLS_BY_PL, NA_BY_PL, SITES,
     COMMENT_PRESETS, THRESHOLD_ABS, THRESHOLD_REL,
 )
-# OWN_SITE is defined as a dev stub below (in production it comes from env).
+# OWN_SITE / USER_ID are dev stubs below — in production they come from the
+# Databricks user identity (see README open items).
 
 # ── App init ──────────────────────────────────────────────────────────────────
 
@@ -45,18 +47,151 @@ app = dash.Dash(
 # WSGI entry point for gunicorn on Databricks Apps (`app:server` in app.yaml)
 server = app.server
 
-# In production (Databricks Apps) this is set via env; for dev use a stub
-OWN_SITE = "SEDICO"
+# DEV STUBS — in production these come from the Databricks user identity.
+OWN_SITE  = "SEDICO"
+USER_ID   = "dev-user"
+USER_NAME = "Lorenzo Muscillo"
 
-# ── Schema constant ───────────────────────────────────────────────────────────
-# Actual week_id comes from DB in production; hardcoded for dev/POC
-CURRENT_WEEK = {"week_id": 19, "year": 2026}
+
+# ── Current week ──────────────────────────────────────────────────────────────
+# The open week is owned by the DB (weeks table, set by the Tuesday job).
+
+def _load_current_week() -> dict:
+    try:
+        wk = db.get_current_week()
+        return {"week_id": int(wk["week_id"]), "year": int(wk["year"])}
+    except Exception as exc:  # DB unavailable — app still starts
+        print(f"[warn] could not load current week from DB: {exc}")
+        return {"week_id": 0, "year": 0}
+
+
+CURRENT_WEEK = _load_current_week()
+
+
+# ── DB ↔ state helpers ────────────────────────────────────────────────────────
+
+def _to_float(s) -> float | None:
+    """Form string → DB numeric (empty → None)."""
+    if isinstance(s, str):
+        s = s.strip()
+    if s in (None, ""):
+        return None
+    try:
+        return float(s)
+    except (TypeError, ValueError):
+        return None
+
+
+def _fmt(v) -> str:
+    """DB numeric → display string for a number input (None/NaN → '')."""
+    if v is None or v != v:
+        return ""
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return str(v)
+    return str(int(f)) if f == int(f) else str(f)
+
+
+def _truthy(v) -> bool:
+    """Bool-ish DB value → bool (None/NaN → False)."""
+    return bool(v) if v == v else False
+
+
+def _cell_str(v) -> str:
+    """Text DB value → str (None/NaN → '')."""
+    return v if isinstance(v, str) else ""
+
+
+def _apply_comment(fri_comments_pl: dict, cid: str, row) -> None:
+    """Copy a Friday FRC row's stored comment into fri_comments state."""
+    if cid not in fri_comments_pl:
+        return
+    preset = _cell_str(row.get("comment_preset"))
+    fri_comments_pl[cid]["presets"] = [p for p in preset.split(",") if p]
+    fri_comments_pl[cid]["others"]  = _cell_str(row.get("comment_other"))
+
+
+def _load_slice(state: dict, site: str, pl: str) -> None:
+    """
+    Populate state[...][site][pl] from the DB. No-op if the slice is already
+    loaded; on a DB read error the slice is left empty and NOT marked loaded
+    (so it is retried the next time it is viewed).
+    """
+    key = f"{site}|{pl}"
+    if key in state["loaded"]:
+        return
+    week    = CURRENT_WEEK["week_id"]
+    col_ids = {c["id"] for c in COLS_BY_PL[pl]}
+    is_own  = site == OWN_SITE
+
+    try:
+        latest = db.get_latest_submissions(week, site, pl)
+    except Exception as exc:
+        print(f"[warn] get_latest_submissions failed for {key}: {exc}")
+        return
+
+    for _, r in latest.iterrows():
+        rid, cid = r["submission_type"], r["channel"]
+        if rid not in state["values"][site][pl] or cid not in col_ids:
+            continue
+        state["values"][site][pl][rid][cid] = _fmt(r["value_kpcs"])
+        state["submitted"][site][pl][rid]   = True
+        if _truthy(r["is_zero_flagged"]):
+            state["zero_flags"][site][pl][rid][cid] = True
+        if is_own and rid == "fri_frc":
+            _apply_comment(state["fri_comments"][pl], cid, r)
+
+    # Drafts exist only for the user's own site.
+    if is_own:
+        try:
+            drafts = db.get_drafts(week, site, pl, USER_ID)
+        except Exception as exc:
+            print(f"[warn] get_drafts failed for {key}: {exc}")
+            drafts = None
+        if drafts is not None:
+            for _, r in drafts.iterrows():
+                rid, cid = r["submission_type"], r["channel"]
+                if rid not in state["values"][site][pl] or cid not in col_ids:
+                    continue
+                if state["submitted"][site][pl].get(rid):
+                    continue  # a submitted row wins over a stale draft
+                state["values"][site][pl][rid][cid] = _fmt(r["value_kpcs"])
+                state["drafted"][site][pl][rid]     = True
+                if _truthy(r["is_zero_flagged"]):
+                    state["zero_flags"][site][pl][rid][cid] = True
+                if rid == "fri_frc":
+                    _apply_comment(state["fri_comments"][pl], cid, r)
+
+    state["loaded"].append(key)
+
+
+def _db_payload(state: dict, site: str, pl: str, row_id: str):
+    """Build (values, zero_flags, comments) for one row, ready for db.py."""
+    na_cols = NA_BY_PL[pl].get(row_id, [])
+    raw     = state["values"][site][pl][row_id]
+    zf      = state["zero_flags"][site][pl][row_id]
+    values, zero_flags = {}, {}
+    for c in COLS_BY_PL[pl]:
+        cid = c["id"]
+        if cid in na_cols:
+            continue
+        values[cid]     = _to_float(raw.get(cid, ""))
+        zero_flags[cid] = bool(zf.get(cid, False))
+    comments: dict = {}
+    if row_id == "fri_frc":
+        for cid, fc in state["fri_comments"][pl].items():
+            comments[cid] = {
+                "presets": fc.get("presets", []),
+                "others":  fc.get("others", ""),
+            }
+    return values, zero_flags, comments
 
 
 def _empty_state() -> dict:
     """
-    Return a fresh client-side state dict stored in dcc.Store.
-    Structure mirrors the JS state in the HTML mockup.
+    Return a fresh client-side state dict stored in dcc.Store, pre-loaded
+    with the user's own site (Frames) from the DB.
     """
     state: dict = {
         "site":           OWN_SITE,
@@ -68,6 +203,7 @@ def _empty_state() -> dict:
         "drafted":        {},   # {site: {pl: {row_id: bool}}}
         "zero_flags":     {},   # {site: {pl: {row_id: {col_id: bool}}}}
         "fri_comments":   {},   # {pl: {col_id: {presets:[], others:""}}}
+        "loaded":         [],   # ["site|pl", ...] slices fetched from the DB
     }
     for s in SITES:
         state["values"][s]     = {}
@@ -85,16 +221,8 @@ def _empty_state() -> dict:
         cols = COLS_BY_PL[pl]
         state["fri_comments"][pl] = {c["id"]: {"presets": [], "others": ""} for c in cols}
 
-    # ── Seed SEDICO FRAMES with demo data (remove in production) ──
-    sf = state["values"]["SEDICO"]["FRAMES"]
-    sf["py"]      = {"inbound":"1200","rop_std":"349","rop_samples":"","whls_gross":"690","whls_net":"628","retail":"141","gvi":"253","ds_na":"35","ecom":"26","sample":"2"}
-    sf["siop"]    = {"inbound":"1275","rop_std":"242","rop_samples":"","whls_gross":"721","whls_net":"","retail":"163","gvi":"214","ds_na":"40","ecom":"14","sample":"2"}
-    sf["mon_frc"] = {"inbound":"1307","rop_std":"375","rop_samples":"8","whls_gross":"690","whls_net":"655","retail":"105","gvi":"211","ds_na":"16","ecom":"31","sample":"2"}
-    sf["thu_frc"] = {"inbound":"1307","rop_std":"375","rop_samples":"","whls_gross":"690","whls_net":"655","retail":"105","gvi":"211","ds_na":"16","ecom":"31","sample":"2"}
-    state["submitted"]["SEDICO"]["FRAMES"]["py"]      = True
-    state["submitted"]["SEDICO"]["FRAMES"]["siop"]    = True
-    state["submitted"]["SEDICO"]["FRAMES"]["mon_frc"] = True
-    state["submitted"]["SEDICO"]["FRAMES"]["thu_frc"] = True
+    # Pre-load the default view (own site, Frames) from the DB.
+    _load_slice(state, OWN_SITE, "FRAMES")
 
     return state
 
@@ -108,7 +236,7 @@ app.layout = html.Div([
     dcc.Store(id="toast-store", data=""),
 
     # Topbar (static — user identity doesn't change mid-session)
-    render_topbar("Lorenzo Muscillo"),
+    render_topbar(USER_NAME),
 
     # Dynamic section — re-rendered on every state change
     html.Div(id="app-header-container"),
@@ -169,6 +297,7 @@ def change_site(site: str, state: dict) -> dict:
         state["site"]     = site
         state["fri_open"] = False
         state["submit_attempted"] = False
+        _load_slice(state, site, state["pl"])
     return state
 
 
@@ -189,6 +318,7 @@ def switch_pl(n_frames, n_wear, state: dict) -> dict:
         state["pl"]       = new_pl
         state["fri_open"] = False
         state["submit_attempted"] = False
+        _load_slice(state, state["site"], new_pl)
     return state
 
 
@@ -296,10 +426,15 @@ def save_row(n_clicks_list, state: dict):
     if not has_data:
         return state, "⚠ Enter at least one value before saving."
 
-    state["drafted"][site][pl][row_id] = True
     row_label = next(r["label"] for r in ROWS if r["id"] == row_id)
+    values, zero_flags, comments = _db_payload(state, site, pl, row_id)
+    try:
+        db.save_draft(CURRENT_WEEK["week_id"], site, pl, USER_ID,
+                      row_id, values, zero_flags, comments)
+    except Exception as exc:
+        return state, f"⚠ Save failed — {exc}"
 
-    # In production: call db.save_draft(...) here
+    state["drafted"][site][pl][row_id] = True
     return state, f"⤓ {row_label} — draft saved"
 
 
@@ -328,11 +463,17 @@ def submit_row(n_clicks_list, state: dict):
     if not has_data:
         return state, "⚠ Enter at least one value before submitting."
 
+    row_label = next(r["label"] for r in ROWS if r["id"] == row_id)
+    values, zero_flags, comments = _db_payload(state, site, pl, row_id)
+    try:
+        db.submit_row(CURRENT_WEEK["week_id"], site, pl, USER_ID,
+                      row_id, values, zero_flags, comments)
+        db.delete_draft(CURRENT_WEEK["week_id"], site, pl, row_id, USER_ID)
+    except Exception as exc:
+        return state, f"⚠ Submit failed — {exc}"
+
     state["submitted"][site][pl][row_id] = True
     state["drafted"][site][pl][row_id]   = False
-    row_label = next(r["label"] for r in ROWS if r["id"] == row_id)
-
-    # In production: call db.submit_row(...) here, then db.delete_draft(...)
     return state, f"✓ {row_label} submitted"
 
 
@@ -381,8 +522,14 @@ def save_fri(n1, n2, state: dict):
     if not has_data:
         return state, "⚠ Enter at least one value before saving."
 
+    values, zero_flags, comments = _db_payload(state, site, pl, "fri_frc")
+    try:
+        db.save_draft(CURRENT_WEEK["week_id"], site, pl, USER_ID,
+                      "fri_frc", values, zero_flags, comments)
+    except Exception as exc:
+        return state, f"⚠ Save failed — {exc}"
+
     state["drafted"][site][pl]["fri_frc"] = True
-    # In production: call db.save_draft(...) here
     return state, "⤓ Friday FRC — draft saved"
 
 
@@ -440,11 +587,18 @@ def submit_fri(n1, n2, state: dict):
         missing_labels = [c["label"] for c in cols if c["id"] in missing]
         return state, f"⚠ Comment required: {', '.join(missing_labels)}"
 
+    values, zero_flags, comments = _db_payload(state, site, pl, "fri_frc")
+    try:
+        db.submit_row(CURRENT_WEEK["week_id"], site, pl, USER_ID,
+                      "fri_frc", values, zero_flags, comments)
+        db.delete_draft(CURRENT_WEEK["week_id"], site, pl, "fri_frc", USER_ID)
+    except Exception as exc:
+        return state, f"⚠ Submit failed — {exc}"
+
     state["submitted"][site][pl]["fri_frc"] = True
     state["drafted"][site][pl]["fri_frc"]   = False
     state["fri_open"]        = False
     state["submit_attempted"] = False
-    # In production: call db.submit_row(...) + db.delete_draft(...) here
     return state, "✓ Friday FRC submitted"
 
 
@@ -485,7 +639,9 @@ def bulk_action(n_save, n_submit, state: dict):
 
     state  = deepcopy(state)
     site, pl = state["site"], state["pl"]
-    n = 0
+    week = CURRENT_WEEK["week_id"]
+    is_save = triggered == "btn-save-all"
+    n, errors = 0, 0
 
     for row in ROWS:
         rid = row["id"]
@@ -500,17 +656,32 @@ def bulk_action(n_save, n_submit, state: dict):
         if not has_data:
             continue
 
-        if triggered == "btn-save-all":
-            state["drafted"][site][pl][rid] = True
-        else:
-            state["submitted"][site][pl][rid] = True
-            state["drafted"][site][pl][rid]   = False
-        n += 1
+        values, zero_flags, comments = _db_payload(state, site, pl, rid)
+        try:
+            if is_save:
+                db.save_draft(week, site, pl, USER_ID, rid,
+                              values, zero_flags, comments)
+                state["drafted"][site][pl][rid] = True
+            else:
+                db.submit_row(week, site, pl, USER_ID, rid,
+                              values, zero_flags, comments)
+                db.delete_draft(week, site, pl, rid, USER_ID)
+                state["submitted"][site][pl][rid] = True
+                state["drafted"][site][pl][rid]   = False
+            n += 1
+        except Exception as exc:
+            errors += 1
+            print(f"[warn] bulk {triggered} {rid} failed: {exc}")
 
-    if triggered == "btn-save-all":
-        msg = f"⤓ {n} row(s) saved as draft" if n else "No open rows with data to save."
+    verb = "saved as draft" if is_save else "submitted"
+    if n and errors:
+        msg = f"{n} row(s) {verb}, {errors} failed — check and retry"
+    elif n:
+        msg = f"{'⤓' if is_save else '✓'} {n} row(s) {verb}"
+    elif errors:
+        msg = f"⚠ All {errors} row(s) failed — check the connection"
     else:
-        msg = f"✓ {n} row(s) submitted" if n else "No open rows with data."
+        msg = "No open rows with data to save." if is_save else "No open rows with data."
 
     return state, msg
 

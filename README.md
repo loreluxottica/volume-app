@@ -87,18 +87,21 @@ pip install -r requirements.txt
 python app.py        # http://localhost:8050
 ```
 
-Il layer DB (`data/db.py`) usa connessione lazy: l'app si avvia anche senza un
-SQL Warehouse configurato. Attualmente `app.py` **non** chiama `db.py` — gira su
-dati stub (i punti di aggancio sono i commenti `# In production:` nei callback).
+`app.py` legge e scrive su Delta Lake tramite `data/db.py`: la settimana
+corrente e i dati di ogni coppia (sito, product line) vengono caricati dal DB
+(on-demand, alla prima apertura), e Save / Submit scrivono nelle tabelle
+`drafts` / `submissions`. La connessione è lazy: se il DB non è raggiungibile
+l'app si avvia comunque, con la griglia vuota.
 
 ## Runtime su Databricks Apps
 
 L'app è servita da **gunicorn** (`app:server`, vedi `app.yaml`). La porta è
 letta da `DATABRICKS_APP_PORT` con bind `0.0.0.0` in `gunicorn.conf.py`.
 
-`DATABRICKS_HOST` e `DATABRICKS_TOKEN` sono iniettati da Databricks Apps.
-Per leggere/scrivere su Delta Lake serve impostare a mano `DATABRICKS_HTTP_PATH`
-(HTTP path del SQL Warehouse) nelle env var dell'app — non ancora configurato.
+`DATABRICKS_HOST` e le credenziali OAuth del service principal sono iniettate
+da Databricks Apps; l'auth è risolta da `databricks.sdk.Config` in `db.py`.
+`DATABRICKS_HTTP_PATH` è collegato in `app.yaml` alla risorsa SQL Warehouse
+dell'app (`valueFrom: sql-warehouse`).
 
 ## Test DB connectivity
 
@@ -161,6 +164,6 @@ WHERE official_log = TRUE;
 
 - Confermare la matrice N/A per sito (`data/schema.py` — `NA_FRAMES`/`NA_WEARABLES`)
 - Confermare lo scadenzario per sito (`data/schema.py` — `DEADLINES`)
-- Collegare le chiamate `db.py` nei callback di `app.py` (`# In production:`)
-- Mappare l'identità utente Databricks → sito (`OWN_SITE` in `app.py`)
-- Configurare `DATABRICKS_HTTP_PATH` e l'app di produzione
+- Mappare l'identità utente Databricks → sito e user_id (`OWN_SITE` / `USER_ID`
+  in `app.py`, attualmente stub)
+- Creare l'app di produzione
