@@ -28,14 +28,26 @@ volume-app/
 
 ## Deploy
 
-La Databricks App **`dataretrival`** (ambiente dev) è collegata a questa repo:
-`https://github.com/loreluxottica/volume-app.git`.
+La Databricks App **`dataretrival`** (ambiente dev) deploia da un **Git folder**
+del workspace clonato da questa repo:
 
-Il deploy NON passa più dal `databricks sync` locale. Flusso:
+- Git folder: `/Workspace/Users/lorenzo.muscillo@luxottica.com/volume-app`
+- Branch tracciato: `dev`
 
-1. `git push` delle modifiche su GitHub (vedi `scripts/deploy-dev.ps1`).
-2. Nella UI Databricks → App `dataretrival` → **Deploy**, selezionando il
-   branch `dev`. Databricks pull il codice dalla repo e riavvia l'app.
+Il deploy si lancia con un solo comando, che fa l'intero ciclo
+(push GitHub → pull del Git folder → deploy app):
+
+```powershell
+.\scripts\deploy-dev.ps1
+```
+
+In alternativa, manualmente:
+
+```powershell
+git push origin dev
+databricks repos update /Workspace/Users/lorenzo.muscillo@luxottica.com/volume-app --branch dev
+databricks apps deploy dataretrival --source-code-path /Workspace/Users/lorenzo.muscillo@luxottica.com/volume-app
+```
 
 App URL: https://dataretrival-8661566820370235.15.azure.databricksapps.com
 
@@ -58,8 +70,7 @@ git push -u origin feature/<nome>   # poi Pull Request verso dev su GitHub
 # dopo il merge della PR in dev:
 git checkout dev
 git pull
-.\scripts\deploy-dev.ps1            # push di dev su GitHub
-# poi: Deploy dalla UI Databricks (branch dev)
+.\scripts\deploy-dev.ps1            # push + pull Git folder + deploy
 ```
 
 ## Sviluppo locale
