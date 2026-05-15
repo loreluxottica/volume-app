@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Environment / secrets
+.env
+*.local
+
+# Databricks CLI sync state
+.databricks/
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

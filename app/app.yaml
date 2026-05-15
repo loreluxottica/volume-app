@@ -1,0 +1,5 @@
+command:
+  - gunicorn
+  - app:server
+  - -c
+  - gunicorn.conf.py
