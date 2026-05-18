@@ -348,11 +348,38 @@ def _empty_state() -> dict:
     return state
 
 
+# ── Two-store split ───────────────────────────────────────────────────────────
+# State is held in two dcc.Stores. `app-state` carries structural state and is
+# the Input of render_ui — changing it triggers a full re-render. `form-values`
+# carries the raw typed values and is only ever read as State, so a keystroke
+# updates it WITHOUT re-rendering (no input churn, no lost characters).
+# Callbacks merge the two into one dict, run the existing logic, then split the
+# result back — so the DB/state helpers stay unchanged.
+
+_FORM_KEYS = ("values", "fri_comments", "wip_ot_comments")
+
+
+def _form_part(s: dict) -> dict:
+    return {k: s[k] for k in _FORM_KEYS}
+
+
+def _app_part(s: dict) -> dict:
+    return {k: v for k, v in s.items() if k not in _FORM_KEYS}
+
+
+def _merge(app_data: dict, form_data: dict) -> dict:
+    return {**app_data, **form_data}
+
+
 # ── Layout ────────────────────────────────────────────────────────────────────
 
+_INIT_STATE = _empty_state()
+
 app.layout = html.Div([
-    # Client-side state store
-    dcc.Store(id="app-state", data=_empty_state()),
+    # Structural state — Input of render_ui (changes trigger a re-render)
+    dcc.Store(id="app-state", data=_app_part(_INIT_STATE)),
+    # Typed values — read as State only, never triggers a re-render
+    dcc.Store(id="form-values", data=_form_part(_INIT_STATE)),
     # Toast notification store
     dcc.Store(id="toast-store", data=""),
     # Fires once on page load → the bootstrap callback (runs in a request ctx)
@@ -374,14 +401,17 @@ app.layout = html.Div([
 
 @app.callback(
     Output("app-state",   "data", allow_duplicate=True),
+    Output("form-values", "data", allow_duplicate=True),
     Output("toast-store", "data", allow_duplicate=True),
     Input("boot-trigger", "n_intervals"),
     State("app-state", "data"),
+    State("form-values", "data"),
     prevent_initial_call=True,
 )
-def bootstrap(_n, state: dict):
+def bootstrap(_n, app_data: dict, form_data: dict):
+    state = _merge(app_data, form_data)
     if state.get("booted"):
-        return dash.no_update, dash.no_update
+        return dash.no_update, dash.no_update, dash.no_update
 
     global CURRENT_WEEK
     CURRENT_WEEK = _load_current_week()
@@ -397,7 +427,8 @@ def bootstrap(_n, state: dict):
 
     ok = _load_for_view(state, state["site"], state["pl"])
     state["booted"] = True
-    return state, ("" if ok else "⚠ Could not load data from the database.")
+    return (_app_part(state), _form_part(state),
+            "" if ok else "⚠ Could not load data from the database.")
 
 
 # ── Main render callback ──────────────────────────────────────────────────────
@@ -407,8 +438,10 @@ def bootstrap(_n, state: dict):
     Output("app-header-container", "children"),
     Output("app-body-container",   "children"),
     Input("app-state", "data"),
+    State("form-values", "data"),
 )
-def render_ui(state: dict):
+def render_ui(app_data: dict, form_data: dict):
+    state = _merge(app_data, form_data)
     topbar = render_topbar(_display_name(state.get("user", "")))
 
     if not state.get("booted"):
@@ -461,52 +494,65 @@ def render_ui(state: dict):
 
 @app.callback(
     Output("app-state",   "data", allow_duplicate=True),
+    Output("form-values", "data", allow_duplicate=True),
     Output("toast-store", "data", allow_duplicate=True),
     Input("site-select", "value"),
     State("app-state", "data"),
+    State("form-values", "data"),
     prevent_initial_call=True,
 )
-def change_site(site: str, state: dict):
+def change_site(site: str, app_data: dict, form_data: dict):
+    state = _merge(app_data, form_data)
     if not site or site == state["site"]:
-        return dash.no_update, dash.no_update
+        return dash.no_update, dash.no_update, dash.no_update
     state["site"]     = site
     state["fri_open"] = False
     state["submit_attempted"] = False
     ok = _load_for_view(state, site, state["pl"])
-    return state, ("" if ok else f"⚠ Could not load data for {site}.")
+    return (_app_part(state), _form_part(state),
+            "" if ok else f"⚠ Could not load data for {site}.")
 
 
 # ── Product line tab callbacks ────────────────────────────────────────────────
 
 @app.callback(
     Output("app-state",   "data", allow_duplicate=True),
+    Output("form-values", "data", allow_duplicate=True),
     Output("toast-store", "data", allow_duplicate=True),
     Input("tab-frames",    "n_clicks"),
     Input("tab-wearables", "n_clicks"),
     State("app-state", "data"),
+    State("form-values", "data"),
     prevent_initial_call=True,
 )
-def switch_pl(n_frames, n_wear, state: dict):
+def switch_pl(n_frames, n_wear, app_data: dict, form_data: dict):
+    state = _merge(app_data, form_data)
     triggered = ctx.triggered_id
     new_pl = "FRAMES" if triggered == "tab-frames" else "WEARABLES"
     if new_pl == state["pl"]:
-        return dash.no_update, dash.no_update
+        return dash.no_update, dash.no_update, dash.no_update
     state["pl"]       = new_pl
     state["fri_open"] = False
     state["submit_attempted"] = False
     ok = _load_for_view(state, state["site"], new_pl)
-    return state, ("" if ok else "⚠ Could not load data.")
+    return (_app_part(state), _form_part(state),
+            "" if ok else "⚠ Could not load data.")
 
 
 # ── Row-level input callback ──────────────────────────────────────────────────
 
+# Writes typed values into `form-values` only — no re-render, so typing is
+# never interrupted by an input remount.
+
 @app.callback(
-    Output("app-state", "data", allow_duplicate=True),
+    Output("form-values", "data", allow_duplicate=True),
     Input({"type": "row-input", "row": ALL, "col": ALL}, "value"),
     State("app-state", "data"),
+    State("form-values", "data"),
     prevent_initial_call=True,
 )
-def update_row_values(values, state: dict):
+def update_row_values(values, app_data: dict, form_data: dict):
+    state = _merge(app_data, form_data)
     if not ctx.triggered or not _can_edit(state["site"], state):
         return dash.no_update
     site, pl = state["site"], state["pl"]
@@ -517,28 +563,31 @@ def update_row_values(values, state: dict):
         row_id, col_id = id_dict["row"], id_dict["col"]
         val = trigger["value"]
         state["values"][site][pl][row_id][col_id] = str(val) if val is not None else ""
-    return state
+    return _form_part(state)
 
 
 # ── Friday FRC input callback ─────────────────────────────────────────────────
+# Friday values and comment text/presets go to `form-values` (no re-render).
+# The zero checkbox is handled separately (update_fri_zero) because it changes
+# the rendered input's disabled state and therefore does need a re-render.
 
 @app.callback(
-    Output("app-state", "data", allow_duplicate=True),
+    Output("form-values", "data", allow_duplicate=True),
     Input({"type": "fri-input",      "col": ALL}, "value"),
-    Input({"type": "fri-zero",       "col": ALL}, "value"),
     Input({"type": "fri-presets",    "col": ALL}, "value"),
     Input({"type": "fri-others",     "col": ALL}, "value"),
     Input({"type": "wip-ot-presets", "col": ALL}, "value"),
     Input({"type": "wip-ot-others",  "col": ALL}, "value"),
     State("app-state", "data"),
+    State("form-values", "data"),
     prevent_initial_call=True,
 )
-def update_fri_values(fri_vals, fri_zeros, fri_presets, fri_others,
-                      wip_presets, wip_others, state: dict):
+def update_fri_values(fri_vals, fri_presets, fri_others,
+                      wip_presets, wip_others, app_data: dict, form_data: dict):
+    state = _merge(app_data, form_data)
     if not ctx.triggered or not _can_edit(state["site"], state):
         return dash.no_update
     site, pl = state["site"], state["pl"]
-    changed = False
 
     for trigger in ctx.triggered:
         id_dict = json.loads(trigger["prop_id"].split(".")[0])
@@ -547,40 +596,53 @@ def update_fri_values(fri_vals, fri_zeros, fri_presets, fri_others,
         val     = trigger["value"]
 
         if t == "fri-input":
-            new_val = str(val) if val is not None else ""
-            if state["values"][site][pl]["fri_frc"].get(col_id, "") != new_val:
-                state["values"][site][pl]["fri_frc"][col_id] = new_val
-                changed = True
-        elif t == "fri-zero":
-            is_zero = bool(val)
-            if state["zero_flags"][site][pl]["fri_frc"].get(col_id, False) != is_zero:
-                state["zero_flags"][site][pl]["fri_frc"][col_id] = is_zero
-                changed = True
-            if is_zero and state["values"][site][pl]["fri_frc"].get(col_id) != "0":
-                state["values"][site][pl]["fri_frc"][col_id] = "0"
-                changed = True
+            state["values"][site][pl]["fri_frc"][col_id] = str(val) if val is not None else ""
         elif t == "fri-presets":
-            new_p = val or []
-            if state["fri_comments"][site][pl][col_id].get("presets", []) != new_p:
-                state["fri_comments"][site][pl][col_id]["presets"] = new_p
-                changed = True
+            state["fri_comments"][site][pl][col_id]["presets"] = val or []
         elif t == "fri-others":
-            new_o = val or ""
-            if state["fri_comments"][site][pl][col_id].get("others", "") != new_o:
-                state["fri_comments"][site][pl][col_id]["others"] = new_o
-                changed = True
+            state["fri_comments"][site][pl][col_id]["others"] = val or ""
         elif t == "wip-ot-presets":
-            new_p = val or []
-            if state["wip_ot_comments"][site][pl][col_id].get("presets", []) != new_p:
-                state["wip_ot_comments"][site][pl][col_id]["presets"] = new_p
-                changed = True
+            state["wip_ot_comments"][site][pl][col_id]["presets"] = val or []
         elif t == "wip-ot-others":
-            new_o = val or ""
-            if state["wip_ot_comments"][site][pl][col_id].get("others", "") != new_o:
-                state["wip_ot_comments"][site][pl][col_id]["others"] = new_o
-                changed = True
+            state["wip_ot_comments"][site][pl][col_id]["others"] = val or ""
 
-    return state if changed else dash.no_update
+    return _form_part(state)
+
+
+# ── Friday FRC zero-flag callback ─────────────────────────────────────────────
+# Toggling "Confirm zero" disables the value input, so this DOES re-render.
+# The change-detection guard stops the panel-open mount from re-rendering.
+
+@app.callback(
+    Output("app-state",   "data", allow_duplicate=True),
+    Output("form-values", "data", allow_duplicate=True),
+    Input({"type": "fri-zero", "col": ALL}, "value"),
+    State("app-state", "data"),
+    State("form-values", "data"),
+    prevent_initial_call=True,
+)
+def update_fri_zero(fri_zeros, app_data: dict, form_data: dict):
+    state = _merge(app_data, form_data)
+    if not ctx.triggered or not _can_edit(state["site"], state):
+        return dash.no_update, dash.no_update
+    site, pl = state["site"], state["pl"]
+    changed = False
+
+    for trigger in ctx.triggered:
+        id_dict = json.loads(trigger["prop_id"].split(".")[0])
+        if id_dict["type"] != "fri-zero":
+            continue
+        col_id  = id_dict["col"]
+        is_zero = bool(trigger["value"])
+        if state["zero_flags"][site][pl]["fri_frc"].get(col_id, False) != is_zero:
+            state["zero_flags"][site][pl]["fri_frc"][col_id] = is_zero
+            if is_zero:
+                state["values"][site][pl]["fri_frc"][col_id] = "0"
+            changed = True
+
+    if not changed:
+        return dash.no_update, dash.no_update
+    return _app_part(state), _form_part(state)
 
 
 # ── Friday panel toggle ───────────────────────────────────────────────────────
@@ -622,9 +684,11 @@ def toggle_wip_ot_panel(n, state: dict):
     Output("toast-store", "data", allow_duplicate=True),
     Input({"type": "btn-save", "row": ALL}, "n_clicks"),
     State("app-state", "data"),
+    State("form-values", "data"),
     prevent_initial_call=True,
 )
-def save_row(n_clicks_list, state: dict):
+def save_row(n_clicks_list, app_data: dict, form_data: dict):
+    state = _merge(app_data, form_data)
     triggered = ctx.triggered_id
     if not triggered or not any(n_clicks_list):
         return dash.no_update, dash.no_update
@@ -648,7 +712,7 @@ def save_row(n_clicks_list, state: dict):
         return dash.no_update, f"⚠ Save failed — {exc}"
 
     state["drafted"][site][pl][row_id] = True
-    return state, f"⤓ {row_label} — draft saved"
+    return _app_part(state), f"⤓ {row_label} — draft saved"
 
 
 # ── Submit row ────────────────────────────────────────────────────────────────
@@ -658,9 +722,11 @@ def save_row(n_clicks_list, state: dict):
     Output("toast-store", "data", allow_duplicate=True),
     Input({"type": "btn-submit", "row": ALL}, "n_clicks"),
     State("app-state", "data"),
+    State("form-values", "data"),
     prevent_initial_call=True,
 )
-def submit_row(n_clicks_list, state: dict):
+def submit_row(n_clicks_list, app_data: dict, form_data: dict):
+    state = _merge(app_data, form_data)
     triggered = ctx.triggered_id
     if not triggered or not any(n_clicks_list):
         return dash.no_update, dash.no_update
@@ -689,7 +755,7 @@ def submit_row(n_clicks_list, state: dict):
                 state["submit_attempted"] = True
                 state["wip_ot_open"][site][pl] = True
                 missing_labels = [c["label"] for c in COLS_BY_PL[pl] if c["id"] in missing_cmt]
-                return state, f"⚠ Comment required (WIP OT ≤ 90%): {', '.join(missing_labels)}"
+                return _app_part(state), f"⚠ Comment required (WIP OT ≤ 90%): {', '.join(missing_labels)}"
 
     row_label = next(r["label"] for r in ROWS if r["id"] == row_id)
     values, zero_flags, comments = _db_payload(state, site, pl, row_id)
@@ -705,7 +771,7 @@ def submit_row(n_clicks_list, state: dict):
 
     state["submitted"][site][pl][row_id] = True
     state["drafted"][site][pl][row_id]   = False
-    return state, f"✓ {row_label} submitted"
+    return _app_part(state), f"✓ {row_label} submitted"
 
 
 # ── Change submission (re-open) ───────────────────────────────────────────────
@@ -738,9 +804,11 @@ def change_submission(n_clicks_list, state: dict):
     Input("btn-fri-save",        "n_clicks"),
     Input("btn-fri-save-bottom", "n_clicks"),
     State("app-state", "data"),
+    State("form-values", "data"),
     prevent_initial_call=True,
 )
-def save_fri(n1, n2, state: dict):
+def save_fri(n1, n2, app_data: dict, form_data: dict):
+    state = _merge(app_data, form_data)
     if not (n1 or n2):
         return dash.no_update, dash.no_update
 
@@ -761,7 +829,7 @@ def save_fri(n1, n2, state: dict):
         return dash.no_update, f"⚠ Save failed — {exc}"
 
     state["drafted"][site][pl]["fri_frc"] = True
-    return state, "⤓ Friday FRC — draft saved"
+    return _app_part(state), "⤓ Friday FRC — draft saved"
 
 
 # ── Submit Friday FRC ─────────────────────────────────────────────────────────
@@ -772,9 +840,11 @@ def save_fri(n1, n2, state: dict):
     Input("btn-fri-submit",        "n_clicks"),
     Input("btn-fri-submit-bottom", "n_clicks"),
     State("app-state", "data"),
+    State("form-values", "data"),
     prevent_initial_call=True,
 )
-def submit_fri(n1, n2, state: dict):
+def submit_fri(n1, n2, app_data: dict, form_data: dict):
+    state = _merge(app_data, form_data)
     if not (n1 or n2):
         return dash.no_update, dash.no_update
 
@@ -787,7 +857,7 @@ def submit_fri(n1, n2, state: dict):
 
     if not _row_has_data(state, site, pl, "fri_frc"):
         state["submit_attempted"] = True
-        return state, "⚠ Enter at least one value before submitting."
+        return _app_part(state), "⚠ Enter at least one value before submitting."
 
     # A Friday cell that dropped below threshold vs Monday needs a comment.
     vals      = state["values"][site][pl]["fri_frc"]
@@ -801,7 +871,7 @@ def submit_fri(n1, n2, state: dict):
     if missing:
         state["submit_attempted"] = True
         missing_labels = [c["label"] for c in cols if c["id"] in missing]
-        return state, f"⚠ Comment required: {', '.join(missing_labels)}"
+        return _app_part(state), f"⚠ Comment required: {', '.join(missing_labels)}"
 
     values, zero_flags, comments = _db_payload(state, site, pl, "fri_frc")
     week = CURRENT_WEEK["week_id"]
@@ -818,7 +888,7 @@ def submit_fri(n1, n2, state: dict):
     state["drafted"][site][pl]["fri_frc"]   = False
     state["fri_open"]         = False
     state["submit_attempted"] = False
-    return state, "✓ Friday FRC submitted"
+    return _app_part(state), "✓ Friday FRC submitted"
 
 
 # ── Change Friday submission ──────────────────────────────────────────────────
@@ -852,9 +922,11 @@ def change_fri(n, state: dict):
     Input("btn-save-all",   "n_clicks"),
     Input("btn-submit-all", "n_clicks"),
     State("app-state", "data"),
+    State("form-values", "data"),
     prevent_initial_call=True,
 )
-def bulk_action(n_save, n_submit, state: dict):
+def bulk_action(n_save, n_submit, app_data: dict, form_data: dict):
+    state = _merge(app_data, form_data)
     triggered = ctx.triggered_id
     if not triggered:
         return dash.no_update, dash.no_update
@@ -925,7 +997,7 @@ def bulk_action(n_save, n_submit, state: dict):
     else:
         msg = "No open rows with data to save." if is_save else "No open rows with data."
 
-    return state, msg
+    return _app_part(state), msg
 
 
 # ── Toast clientside callback ─────────────────────────────────────────────────
@@ -957,10 +1029,11 @@ app.clientside_callback(
 
 app.clientside_callback(
     """
-    function(fri_values, ids, app_state) {
-        if (!app_state || !Array.isArray(fri_values)) return window.dash_clientside.no_update;
-        var site = app_state.site, pl = app_state.pl;
-        var sliceVals = ((app_state.values || {})[site] || {})[pl] || {};
+    function(fri_values, ids, app_data, form_data) {
+        if (!app_data || !form_data || !Array.isArray(fri_values))
+            return window.dash_clientside.no_update;
+        var site = app_data.site, pl = app_data.pl;
+        var sliceVals = ((form_data.values || {})[site] || {})[pl] || {};
         var mon_frc = sliceVals['mon_frc'] || {};
         var THRESHOLD_ABS = 10, THRESHOLD_REL = 0.10;
         return ids.map(function(id_obj, i) {
@@ -978,6 +1051,7 @@ app.clientside_callback(
     Input({"type": "fri-input", "col": ALL}, "value"),
     State({"type": "fri-input", "col": ALL}, "id"),
     State("app-state", "data"),
+    State("form-values", "data"),
     prevent_initial_call=True,
 )
 
