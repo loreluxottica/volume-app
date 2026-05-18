@@ -7,7 +7,7 @@
 from __future__ import annotations
 from datetime import datetime
 
-from dash import html
+from dash import html, dcc
 
 from data.schema import SITES
 
@@ -42,22 +42,22 @@ def render_app_header(
     months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
     today_str = f"{days[now.weekday()]} {now.day} {months[now.month-1]} {now.year}"
 
-    # Site options: plant name only (table-level access is enforced backend-side)
-    site_options = [
-        html.Option(s, value=s, selected=(s == current_site))
-        for s in SITES
-    ]
-
     header = html.Div(className="app-header", children=[
         html.Div(className="header-left", children=[
 
-            # Site selector
+            # Site selector — dcc.Dropdown so the value reaches the callbacks
+            # (a plain html.Select does not report its value to Dash).
+            # Plant name only; table-level access is enforced backend-side.
             html.Div(className="field-group", children=[
                 html.Div("Site", className="field-label"),
-                html.Select(
-                    site_options,
+                dcc.Dropdown(
                     id="site-select",
+                    options=[{"label": s, "value": s} for s in SITES],
+                    value=current_site,
+                    clearable=False,
+                    searchable=False,
                     className="site-select",
+                    style={"width": "220px"},
                 ),
             ]),
 
