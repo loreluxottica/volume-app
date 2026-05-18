@@ -8,6 +8,7 @@
 #   weeks         — open/closed week management
 #   submissions   — user-entered data (append-only, audit trail)
 #   drafts        — drafts saved before submit (overwritten on each Save)
+#   admins        — emails allowed to edit every site
 # Volume: /Volumes/sbx-logistics/volume-data-entry-app/app_volume
 #         — file storage (exports, uploads, ...)
 #
@@ -41,6 +42,7 @@ _SCHEMA  = "`volume-data-entry-app`"
 _T_WEEKS       = f"{_CATALOG}.{_SCHEMA}.weeks"
 _T_SUBMISSIONS = f"{_CATALOG}.{_SCHEMA}.submissions"
 _T_DRAFTS      = f"{_CATALOG}.{_SCHEMA}.drafts"
+_T_ADMINS      = f"{_CATALOG}.{_SCHEMA}.admins"
 
 # Volume for file storage (exports, uploads). Not used by the SQL layer below.
 VOLUME_PATH = "/Volumes/sbx-logistics/volume-data-entry-app/app_volume"
@@ -150,6 +152,21 @@ def create_week(week_id: int, year: int) -> None:
         "VALUES (?, ?, ?, TRUE)",
         [week_id, year, datetime.now(timezone.utc)],
     )
+
+
+# ── admins ────────────────────────────────────────────────────────────────────
+
+def get_admins() -> set[str]:
+    """
+    Return the set of admin emails (lower-cased). Admins may edit every site.
+    Managed with plain SQL on the `admins` table — never stored in the repo.
+    """
+    df = _exec(f"SELECT email FROM {_T_ADMINS}")
+    return {
+        str(e).strip().lower()
+        for e in df["email"].tolist()
+        if e is not None and e == e   # skip NULL / NaN
+    }
 
 
 # ── submissions ───────────────────────────────────────────────────────────────

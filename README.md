@@ -152,18 +152,34 @@ CREATE TABLE `sbx-logistics`.`volume-data-entry-app`.drafts (
   comment_other STRING
 );
 
--- `sbx-logistics`.`volume-data-entry-app`.gli_extract (view — ultimo valore ufficiale per chiave)
-CREATE VIEW `sbx-logistics`.`volume-data-entry-app`.gli_extract AS
-SELECT week_id, site, product_line, submission_type,
-       channel, value_kpcs, comment_preset, comment_other
-FROM `sbx-logistics`.`volume-data-entry-app`.submissions
-WHERE official_log = TRUE;
+-- `sbx-logistics`.`volume-data-entry-app`.admins (chi può modificare tutti i siti)
+CREATE TABLE `sbx-logistics`.`volume-data-entry-app`.admins (
+  email STRING, added_at TIMESTAMP, added_by STRING
+);
 ```
+
+> `submissions` è append-only: `db.get_latest_submissions` e `get_gli_extract`
+> prendono l'ultima riga per chiave con una window function sul `timestamp` —
+> niente view, niente flip di `official_log`.
+
+## Gestione admin
+
+Gli utenti **admin** (accesso in modifica a tutti i siti) sono righe della
+tabella `admins`. Per abilitare qualcuno basta una `INSERT` — ha effetto al
+successivo caricamento pagina, **senza redeploy** e senza email nel repo:
+
+```sql
+INSERT INTO `sbx-logistics`.`volume-data-entry-app`.admins (email, added_at, added_by)
+VALUES ('nome.cognome@luxottica.com', current_timestamp(), 'lorenzo');
+```
+
+Per revocare: `DELETE FROM ... WHERE email = 'nome.cognome@luxottica.com'`.
+Gli utenti non-admin sono limitati al proprio sito.
 
 ## Item aperti prima della produzione
 
 - Confermare etichette/colonne Wearables di Dongguan (`repl_el`, `meta`, `dummy`)
 - Confermare lo scadenzario per sito (`data/schema.py` — `DEADLINES`)
-- Mappare l'identità utente Databricks → sito e user_id (`OWN_SITE` / `USER_ID`
-  in `app.py`, attualmente stub)
+- Mappare gli utenti non-admin → proprio plant (oggi i non-admin sono limitati
+  a `OWN_SITE`; gli admin si gestiscono nella tabella `admins`)
 - Creare l'app di produzione

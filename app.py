@@ -47,9 +47,19 @@ OWN_SITE    = "SEDICO"     # site shown on load
 GLOBAL_SITE = "GLOBAL"     # pseudo-site: read-only sum of every plant
 DEV_USER    = "lorenzo.muscillo@luxottica.com"  # fallback when no identity header
 
-# Users allowed to edit every site. Everyone else is limited to their own site
-# (the identity→site mapping for non-admins is still an open item).
-ADMIN_USERS = {"lorenzo.muscillo@luxottica.com"}
+def _load_admins() -> set[str]:
+    """
+    Emails allowed to edit every site — read from the `admins` DB table so the
+    list can be managed with plain SQL (INSERT/DELETE), is never committed to
+    git, and takes effect without a redeploy. Falls back to the dev user so the
+    app always keeps at least one admin if the table is empty or unreadable.
+    """
+    try:
+        admins = db.get_admins()
+    except Exception as exc:
+        print(f"[warn] could not load the admin list: {exc}")
+        admins = set()
+    return admins or {DEV_USER}
 
 # Refreshed from the DB by the bootstrap callback on every page load.
 CURRENT_WEEK = {"week_id": 0, "year": 0}
@@ -349,7 +359,7 @@ def bootstrap(_n, state: dict):
 
     user = _current_user()
     state["user"]     = user
-    state["is_admin"] = user in ADMIN_USERS
+    state["is_admin"] = user in _load_admins()
 
     ok = _load_for_view(state, state["site"], state["pl"])
     state["booted"] = True
