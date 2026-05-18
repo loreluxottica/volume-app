@@ -196,6 +196,22 @@ NA_BY_SITE: dict[str, dict[str, dict[str, list[str]]]] = {
 }
 
 
+# GLOBAL — read-only view summing every plant cell by cell. A cell is N/A
+# only when N/A for every plant (if any plant uses it, the sum has a value).
+def _na_intersection(pl: str) -> dict[str, list[str]]:
+    out: dict[str, list[str]] = {}
+    for rid in ROW_IDS:
+        per_plant = [set(NA_BY_SITE[s][pl].get(rid, [])) for s in NA_BY_SITE]
+        out[rid] = sorted(set.intersection(*per_plant)) if per_plant else []
+    return out
+
+
+NA_BY_SITE["GLOBAL"] = {
+    "FRAMES":    _na_intersection("FRAMES"),
+    "WEARABLES": _na_intersection("WEARABLES"),
+}
+
+
 def na_matrix(site: str, pl: str) -> dict[str, list[str]]:
     """N/A columns per row for a given site + product line ({row_id: [col_id]})."""
     return NA_BY_SITE.get(site, {}).get(pl, {})

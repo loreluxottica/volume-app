@@ -103,15 +103,8 @@ body {
 .field-group { display: flex; flex-direction: column; gap: 4px; }
 .field-label { font-size: 9px; letter-spacing: 0.11em; text-transform: uppercase; color: var(--text-3); font-weight: 600; }
 
-/* Site selector */
-.site-select {
-  font-family: var(--font);
-  font-size: 13px; font-weight: 500;
-  border: 1px solid var(--border-strong); border-radius: var(--radius);
-  padding: 5px 10px; background: var(--surface); color: var(--text);
-  cursor: pointer; outline: none; min-width: 200px;
-}
-.site-select:focus { border-color: var(--blue); }
+/* Site selector — dcc.Dropdown draws its own control box; just set the font */
+.site-dropdown { font-family: var(--font); font-size: 13px; font-weight: 500; }
 
 /* Week badge */
 .week-row { display: flex; align-items: center; gap: 8px; }
@@ -168,7 +161,9 @@ body {
 /* ── TABLE ────────────────────────────────────────────── */
 .table-wrap { overflow-x: auto; }
 
-.vol-table { width: 100%; border-collapse: collapse; }
+/* table-layout:fixed + <colgroup> → every data column the same fixed width,
+   unchanged when switching product line. */
+.vol-table { border-collapse: collapse; table-layout: fixed; }
 
 .th-section {
   background: var(--navy); color: var(--navy-text2);

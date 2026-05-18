@@ -446,7 +446,8 @@ def render_data_table(
 ) -> html.Div:
     cols   = COLS_BY_PL[current_pl]
     na_map = na_matrix(current_site, current_pl)
-    dl     = DEADLINES[current_site]
+    dl     = DEADLINES.get(current_site, {})   # GLOBAL has no deadlines
+    is_global = current_site == "GLOBAL"
 
     thead_rows = render_table_header(cols, current_site, current_pl)
 
@@ -490,10 +491,27 @@ def render_data_table(
                 is_readonly=is_readonly,
             ))
 
+    # Fixed column widths so columns never resize when switching product line.
+    colgroup = html.Colgroup(
+        [html.Col(style={"width": "210px"})]
+        + [html.Col(style={"width": "90px"}) for _ in cols]
+        + [html.Col(style={"width": "190px"})]
+    )
+
+    if is_global:
+        summary = html.Div(
+            f"GLOBAL · {current_pl} — sum of all plants (read-only)",
+            className="summary-bar",
+            style={"fontStyle": "italic", "color": "var(--text-2)"},
+        )
+    else:
+        summary = render_summary_bar(submitted, drafted, current_site, current_pl)
+
     return html.Div(children=[
-        render_summary_bar(submitted, drafted, current_site, current_pl),
+        summary,
         html.Div(className="table-wrap", children=[
             html.Table(className="vol-table", children=[
+                colgroup,
                 html.Thead(thead_rows),
                 html.Tbody(tbody_rows),
             ]),

@@ -52,6 +52,9 @@ OWN_SITE  = "SEDICO"          # site shown on load
 USER_ID   = "dev-user"
 USER_NAME = "Lorenzo Muscillo"
 
+# Pseudo-site: a read-only view summing every plant cell by cell.
+GLOBAL_SITE = "GLOBAL"
+
 # TEST MODE: every site is editable for everyone. Per-table access is enforced
 # in the backend (Unity Catalog grants). Set this False once per-user site
 # permissions exist, so users may only edit their own site.
@@ -60,6 +63,8 @@ EDIT_ALL_SITES = True
 
 def _can_edit(site: str) -> bool:
     """Whether the current user may edit the given site."""
+    if site == GLOBAL_SITE:
+        return False
     return EDIT_ALL_SITES or site == OWN_SITE
 
 
@@ -175,6 +180,33 @@ def _load_slice(state: dict, site: str, pl: str) -> None:
     state["loaded"].append(key)
 
 
+def _load_for_view(state: dict, site: str, pl: str) -> None:
+    """Load the DB slice(s) needed to render a site view — all plants for GLOBAL."""
+    if site == GLOBAL_SITE:
+        for s in SITES:
+            _load_slice(state, s, pl)
+    else:
+        _load_slice(state, site, pl)
+
+
+def _global_values(state: dict, pl: str) -> dict:
+    """Sum every plant's grid cell by cell — the GLOBAL read-only view."""
+    out: dict = {}
+    for row in ROWS:
+        rid = row["id"]
+        out[rid] = {}
+        for c in COLS_BY_PL[pl]:
+            cid = c["id"]
+            total, has_any = 0.0, False
+            for s in SITES:
+                v = _to_float(state["values"][s][pl][rid].get(cid, ""))
+                if v is not None:
+                    total += v
+                    has_any = True
+            out[rid][cid] = _fmt(total) if has_any else ""
+    return out
+
+
 def _db_payload(state: dict, site: str, pl: str, row_id: str):
     """Build (values, zero_flags, comments) for one row, ready for db.py."""
     na_cols = na_matrix(site, pl).get(row_id, [])
@@ -266,13 +298,22 @@ def render_ui(state: dict):
     site      = state["site"]
     pl        = state["pl"]
     is_ro     = not _can_edit(site)
-    submitted = state["submitted"][site][pl]
-    drafted   = state["drafted"][site][pl]
-    values    = state["values"][site][pl]
-    zf        = state["zero_flags"][site][pl]
-    fc        = state["fri_comments"][site][pl]
     fri_open  = state["fri_open"]
     sa        = state["submit_attempted"]
+
+    if site == GLOBAL_SITE:
+        # Read-only summed view — no per-row draft/submit state.
+        values    = _global_values(state, pl)
+        submitted = {r["id"]: False for r in ROWS}
+        drafted   = {r["id"]: False for r in ROWS}
+        zf        = {}
+        fc        = {}
+    else:
+        submitted = state["submitted"][site][pl]
+        drafted   = state["drafted"][site][pl]
+        values    = state["values"][site][pl]
+        zf        = state["zero_flags"][site][pl]
+        fc        = state["fri_comments"][site][pl]
 
     header = render_app_header(
         current_site=site, current_pl=pl,
@@ -304,7 +345,7 @@ def change_site(site: str, state: dict) -> dict:
         state["site"]     = site
         state["fri_open"] = False
         state["submit_attempted"] = False
-        _load_slice(state, site, state["pl"])
+        _load_for_view(state, site, state["pl"])
     return state
 
 
@@ -325,7 +366,7 @@ def switch_pl(n_frames, n_wear, state: dict) -> dict:
         state["pl"]       = new_pl
         state["fri_open"] = False
         state["submit_attempted"] = False
-        _load_slice(state, state["site"], new_pl)
+        _load_for_view(state, state["site"], new_pl)
     return state
 
 

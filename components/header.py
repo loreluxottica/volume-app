@@ -52,12 +52,15 @@ def render_app_header(
                 html.Div("Site", className="field-label"),
                 dcc.Dropdown(
                     id="site-select",
-                    options=[{"label": s, "value": s} for s in SITES],
+                    options=(
+                        [{"label": s, "value": s} for s in SITES]
+                        + [{"label": "GLOBAL — all plants", "value": "GLOBAL"}]
+                    ),
                     value=current_site,
                     clearable=False,
                     searchable=False,
-                    className="site-select",
-                    style={"width": "220px"},
+                    className="site-dropdown",
+                    style={"width": "240px"},
                 ),
             ]),
 
