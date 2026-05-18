@@ -8,7 +8,7 @@
 #   weeks         — open/closed week management
 #   submissions   — user-entered data (append-only, audit trail)
 #   drafts        — drafts saved before submit (overwritten on each Save)
-#   admins        — emails allowed to edit every site
+#   app_access    — per-user site access ('*' = every site / admin)
 # Volume: /Volumes/sbx-logistics/volume-data-entry-app/app_volume
 #         — file storage (exports, uploads, ...)
 #
@@ -42,7 +42,7 @@ _SCHEMA  = "`volume-data-entry-app`"
 _T_WEEKS       = f"{_CATALOG}.{_SCHEMA}.weeks"
 _T_SUBMISSIONS = f"{_CATALOG}.{_SCHEMA}.submissions"
 _T_DRAFTS      = f"{_CATALOG}.{_SCHEMA}.drafts"
-_T_ADMINS      = f"{_CATALOG}.{_SCHEMA}.admins"
+_T_ACCESS      = f"{_CATALOG}.{_SCHEMA}.app_access"
 
 # Volume for file storage (exports, uploads). Not used by the SQL layer below.
 VOLUME_PATH = "/Volumes/sbx-logistics/volume-data-entry-app/app_volume"
@@ -156,17 +156,20 @@ def create_week(week_id: int, year: int) -> None:
 
 # ── admins ────────────────────────────────────────────────────────────────────
 
-def get_admins() -> set[str]:
+def get_access() -> dict[str, set[str]]:
     """
-    Return the set of admin emails (lower-cased). Admins may edit every site.
-    Managed with plain SQL on the `admins` table — never stored in the repo.
+    Return {email: {site, ...}} from the `app_access` table — the sites each
+    user may edit. The site '*' means every site (admin). Managed with plain
+    SQL — never stored in the repo.
     """
-    df = _exec(f"SELECT email FROM {_T_ADMINS}")
-    return {
-        str(e).strip().lower()
-        for e in df["email"].tolist()
-        if e is not None and e == e   # skip NULL / NaN
-    }
+    df = _exec(f"SELECT email, site FROM {_T_ACCESS}")
+    out: dict[str, set[str]] = {}
+    for _, r in df.iterrows():
+        email, site = r["email"], r["site"]
+        if email is None or email != email:   # skip NULL / NaN
+            continue
+        out.setdefault(str(email).strip().lower(), set()).add(str(site).strip())
+    return out
 
 
 # ── submissions ───────────────────────────────────────────────────────────────

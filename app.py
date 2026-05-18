@@ -47,19 +47,19 @@ OWN_SITE    = "SEDICO"     # site shown on load
 GLOBAL_SITE = "GLOBAL"     # pseudo-site: read-only sum of every plant
 DEV_USER    = "lorenzo.muscillo@luxottica.com"  # fallback when no identity header
 
-def _load_admins() -> set[str]:
+def _load_access() -> dict[str, set[str]]:
     """
-    Emails allowed to edit every site — read from the `admins` DB table so the
-    list can be managed with plain SQL (INSERT/DELETE), is never committed to
-    git, and takes effect without a redeploy. Falls back to the dev user so the
-    app always keeps at least one admin if the table is empty or unreadable.
+    {email: {editable sites}} from the `app_access` DB table. The site '*'
+    means every site (admin). Managed with plain SQL (no redeploy, never in
+    git). Falls back to full access for the dev user if the table is empty or
+    unreadable, so the app always keeps at least one admin.
     """
     try:
-        admins = db.get_admins()
+        access = db.get_access()
     except Exception as exc:
-        print(f"[warn] could not load the admin list: {exc}")
-        admins = set()
-    return admins or {DEV_USER}
+        print(f"[warn] could not load the access list: {exc}")
+        access = {}
+    return access or {DEV_USER: {"*"}}
 
 # Refreshed from the DB by the bootstrap callback on every page load.
 CURRENT_WEEK = {"week_id": 0, "year": 0}
@@ -96,7 +96,7 @@ def _can_edit(site: str, state: dict) -> bool:
         return False
     if state.get("is_admin"):
         return True
-    return site == OWN_SITE   # non-admins: own site only (mapping is an open item)
+    return site in state.get("sites", [])   # plant owners: only granted sites
 
 
 def _load_current_week() -> dict:
@@ -292,6 +292,7 @@ def _empty_state() -> dict:
         "submit_attempted": False,
         "user":           "",      # signed-in email (set by bootstrap)
         "is_admin":       False,
+        "sites":          [],      # sites the user may edit (set by bootstrap)
         "booted":         False,
         "values":         {},   # {site: {pl: {row_id: {col_id: value}}}}
         "submitted":      {},   # {site: {pl: {row_id: bool}}}
@@ -357,9 +358,14 @@ def bootstrap(_n, state: dict):
     global CURRENT_WEEK
     CURRENT_WEEK = _load_current_week()
 
-    user = _current_user()
+    user  = _current_user()
+    sites = _load_access().get(user, set())
     state["user"]     = user
-    state["is_admin"] = user in _load_admins()
+    state["is_admin"] = "*" in sites
+    state["sites"]    = sorted(s for s in sites if s != "*")
+    # Non-admins start on their own plant.
+    if not state["is_admin"] and state["sites"]:
+        state["site"] = state["sites"][0]
 
     ok = _load_for_view(state, state["site"], state["pl"])
     state["booted"] = True

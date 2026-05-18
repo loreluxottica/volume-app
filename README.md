@@ -152,9 +152,9 @@ CREATE TABLE `sbx-logistics`.`volume-data-entry-app`.drafts (
   comment_other STRING
 );
 
--- `sbx-logistics`.`volume-data-entry-app`.admins (chi può modificare tutti i siti)
-CREATE TABLE `sbx-logistics`.`volume-data-entry-app`.admins (
-  email STRING, added_at TIMESTAMP, added_by STRING
+-- `sbx-logistics`.`volume-data-entry-app`.app_access (accesso per-utente ai siti)
+CREATE TABLE `sbx-logistics`.`volume-data-entry-app`.app_access (
+  email STRING, site STRING, added_at TIMESTAMP, added_by STRING
 );
 ```
 
@@ -162,19 +162,23 @@ CREATE TABLE `sbx-logistics`.`volume-data-entry-app`.admins (
 > prendono l'ultima riga per chiave con una window function sul `timestamp` —
 > niente view, niente flip di `official_log`.
 
-## Gestione admin
+## Gestione accessi
 
-Gli utenti **admin** (accesso in modifica a tutti i siti) sono righe della
-tabella `admins`. Per abilitare qualcuno basta una `INSERT` — ha effetto al
-successivo caricamento pagina, **senza redeploy** e senza email nel repo:
+Gli accessi vivono nella tabella `app_access`: una riga per (utente, sito),
+gestibile con SQL, **senza redeploy** e senza email nel repo. `site = '*'`
+significa admin (tutti i siti); un nome di plant abilita solo quel plant.
 
 ```sql
-INSERT INTO `sbx-logistics`.`volume-data-entry-app`.admins (email, added_at, added_by)
-VALUES ('nome.cognome@luxottica.com', current_timestamp(), 'lorenzo');
+-- admin: accesso a tutti i siti
+INSERT INTO `sbx-logistics`.`volume-data-entry-app`.app_access (email, site, added_at, added_by)
+VALUES ('nome.cognome@luxottica.com', '*', current_timestamp(), 'lorenzo');
+
+-- owner di un plant: una riga per ogni plant abilitato
+INSERT INTO `sbx-logistics`.`volume-data-entry-app`.app_access (email, site, added_at, added_by)
+VALUES ('owner.atlanta@luxottica.com', 'ATLANTA', current_timestamp(), 'lorenzo');
 ```
 
-Per revocare: `DELETE FROM ... WHERE email = 'nome.cognome@luxottica.com'`.
-Gli utenti non-admin sono limitati al proprio sito.
+Revoca: `DELETE FROM ... WHERE email = '...'` (eventualmente `AND site = '...'`).
 
 ## Item aperti prima della produzione
 
