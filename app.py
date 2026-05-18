@@ -538,6 +538,7 @@ def update_fri_values(fri_vals, fri_zeros, fri_presets, fri_others,
     if not ctx.triggered or not _can_edit(state["site"], state):
         return dash.no_update
     site, pl = state["site"], state["pl"]
+    changed = False
 
     for trigger in ctx.triggered:
         id_dict = json.loads(trigger["prop_id"].split(".")[0])
@@ -546,22 +547,40 @@ def update_fri_values(fri_vals, fri_zeros, fri_presets, fri_others,
         val     = trigger["value"]
 
         if t == "fri-input":
-            state["values"][site][pl]["fri_frc"][col_id] = str(val) if val is not None else ""
+            new_val = str(val) if val is not None else ""
+            if state["values"][site][pl]["fri_frc"].get(col_id, "") != new_val:
+                state["values"][site][pl]["fri_frc"][col_id] = new_val
+                changed = True
         elif t == "fri-zero":
             is_zero = bool(val)
-            state["zero_flags"][site][pl]["fri_frc"][col_id] = is_zero
-            if is_zero:
+            if state["zero_flags"][site][pl]["fri_frc"].get(col_id, False) != is_zero:
+                state["zero_flags"][site][pl]["fri_frc"][col_id] = is_zero
+                changed = True
+            if is_zero and state["values"][site][pl]["fri_frc"].get(col_id) != "0":
                 state["values"][site][pl]["fri_frc"][col_id] = "0"
+                changed = True
         elif t == "fri-presets":
-            state["fri_comments"][site][pl][col_id]["presets"] = val or []
+            new_p = val or []
+            if state["fri_comments"][site][pl][col_id].get("presets", []) != new_p:
+                state["fri_comments"][site][pl][col_id]["presets"] = new_p
+                changed = True
         elif t == "fri-others":
-            state["fri_comments"][site][pl][col_id]["others"] = val or ""
+            new_o = val or ""
+            if state["fri_comments"][site][pl][col_id].get("others", "") != new_o:
+                state["fri_comments"][site][pl][col_id]["others"] = new_o
+                changed = True
         elif t == "wip-ot-presets":
-            state["wip_ot_comments"][site][pl][col_id]["presets"] = val or []
+            new_p = val or []
+            if state["wip_ot_comments"][site][pl][col_id].get("presets", []) != new_p:
+                state["wip_ot_comments"][site][pl][col_id]["presets"] = new_p
+                changed = True
         elif t == "wip-ot-others":
-            state["wip_ot_comments"][site][pl][col_id]["others"] = val or ""
+            new_o = val or ""
+            if state["wip_ot_comments"][site][pl][col_id].get("others", "") != new_o:
+                state["wip_ot_comments"][site][pl][col_id]["others"] = new_o
+                changed = True
 
-    return state
+    return state if changed else dash.no_update
 
 
 # ── Friday panel toggle ───────────────────────────────────────────────────────
@@ -939,7 +958,7 @@ app.clientside_callback(
 app.clientside_callback(
     """
     function(fri_values, ids, app_state) {
-        if (!app_state) return window.dash_clientside.no_update;
+        if (!app_state || !Array.isArray(fri_values)) return window.dash_clientside.no_update;
         var site = app_state.site, pl = app_state.pl;
         var sliceVals = ((app_state.values || {})[site] || {})[pl] || {};
         var mon_frc = sliceVals['mon_frc'] || {};
@@ -957,7 +976,7 @@ app.clientside_callback(
     """,
     Output({"type": "fri-comment-section", "col": ALL}, "style"),
     Input({"type": "fri-input", "col": ALL}, "value"),
-    Input({"type": "fri-input", "col": ALL}, "id"),
+    State({"type": "fri-input", "col": ALL}, "id"),
     State("app-state", "data"),
     prevent_initial_call=True,
 )

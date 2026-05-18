@@ -140,7 +140,7 @@ def render_friday_panel(
                 value=fri_values.get(cid) or None,
                 disabled=zf,
                 className=input_cls,
-                debounce=True,
+                debounce=False,
             ),
             # Zero flag checkbox
             html.Div(className="zero-flag-row", children=[
