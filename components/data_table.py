@@ -173,7 +173,6 @@ def render_friday_panel(
                 placeholder="Others (optional)…",
                 value=fc.get("others", ""),
                 className="others-input",
-                debounce=True,
             ),
         ]
         card_children.append(html.Div(
@@ -270,7 +269,6 @@ def render_wip_ot_panel(
                 placeholder="Others (optional)…",
                 value=fc.get("others", ""),
                 className="others-input",
-                debounce=True,
             ),
         ]))
 
