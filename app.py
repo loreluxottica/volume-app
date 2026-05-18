@@ -62,10 +62,6 @@ def _load_access() -> dict[str, set[str]]:
         access = {}
     return access or {DEV_USER: {"*"}}
 
-# Refreshed from the DB by the bootstrap callback on every page load.
-CURRENT_WEEK = {"week_id": 0, "year": 0}
-
-
 def _current_user() -> str:
     """
     The signed-in user's email — from the Databricks Apps request headers
@@ -100,7 +96,16 @@ def _can_edit(site: str, state: dict) -> bool:
     return site in state.get("sites", [])   # plant owners: only granted sites
 
 
-def _load_current_week() -> dict:
+def current_week() -> dict:
+    """
+    Current open week as {week_id, year}.
+
+    Resolved through cache.cached_current_week() so every gunicorn worker
+    self-populates on first use — it must NOT depend on the bootstrap callback
+    having run in this particular worker process (gunicorn runs >1 worker, and
+    a module global is per-process). Returns {0, 0} if the DB is unreachable
+    or has no open week.
+    """
     try:
         wk = cache.cached_current_week()
         return {"week_id": int(wk["week_id"]), "year": int(wk["year"])}
@@ -162,7 +167,7 @@ def _load_slice(state: dict, site: str, pl: str) -> bool:
     key = f"{site}|{pl}"
     if key in state["loaded"]:
         return True
-    week    = CURRENT_WEEK["week_id"]
+    week    = current_week()["week_id"]
     user    = state.get("user") or DEV_USER
     col_ids = {c["id"] for c in COLS_BY_PL[pl]}
 
@@ -232,7 +237,7 @@ def _load_global(state: dict, pl: str) -> bool:
         return True
     col_ids = {c["id"] for c in COLS_BY_PL[pl]}
     try:
-        ext = cache.cached_gli_extract(CURRENT_WEEK["week_id"])
+        ext = cache.cached_gli_extract(current_week()["week_id"])
     except Exception as exc:
         print(f"[warn] get_gli_extract failed: {exc}")
         return False
@@ -413,9 +418,6 @@ def bootstrap(_n, app_data: dict, form_data: dict):
     if state.get("booted"):
         return dash.no_update, dash.no_update, dash.no_update
 
-    global CURRENT_WEEK
-    CURRENT_WEEK = _load_current_week()
-
     user  = _current_user()
     sites = _load_access().get(user, set())
     state["user"]     = user
@@ -475,7 +477,7 @@ def render_ui(app_data: dict, form_data: dict):
 
     header = render_app_header(
         current_site=site, current_pl=pl,
-        week_id=CURRENT_WEEK["week_id"], year=CURRENT_WEEK["year"],
+        week_id=current_week()["week_id"], year=current_week()["year"],
         is_readonly=is_ro,
     )
     body = render_data_table(
@@ -703,7 +705,7 @@ def save_row(n_clicks_list, app_data: dict, form_data: dict):
 
     row_label = next(r["label"] for r in ROWS if r["id"] == row_id)
     values, zero_flags, comments = _db_payload(state, site, pl, row_id)
-    week = CURRENT_WEEK["week_id"]
+    week = current_week()["week_id"]
     try:
         db.save_draft(week, site, pl, state["user"],
                       row_id, values, zero_flags, comments)
@@ -759,7 +761,7 @@ def submit_row(n_clicks_list, app_data: dict, form_data: dict):
 
     row_label = next(r["label"] for r in ROWS if r["id"] == row_id)
     values, zero_flags, comments = _db_payload(state, site, pl, row_id)
-    week = CURRENT_WEEK["week_id"]
+    week = current_week()["week_id"]
     try:
         db.submit_row(week, site, pl, state["user"],
                       row_id, values, zero_flags, comments)
@@ -820,7 +822,7 @@ def save_fri(n1, n2, app_data: dict, form_data: dict):
         return dash.no_update, "⚠ Enter at least one value before saving."
 
     values, zero_flags, comments = _db_payload(state, site, pl, "fri_frc")
-    week = CURRENT_WEEK["week_id"]
+    week = current_week()["week_id"]
     try:
         db.save_draft(week, site, pl, state["user"],
                       "fri_frc", values, zero_flags, comments)
@@ -874,7 +876,7 @@ def submit_fri(n1, n2, app_data: dict, form_data: dict):
         return _app_part(state), f"⚠ Comment required: {', '.join(missing_labels)}"
 
     values, zero_flags, comments = _db_payload(state, site, pl, "fri_frc")
-    week = CURRENT_WEEK["week_id"]
+    week = current_week()["week_id"]
     try:
         db.submit_row(week, site, pl, state["user"],
                       "fri_frc", values, zero_flags, comments)
@@ -935,7 +937,7 @@ def bulk_action(n_save, n_submit, app_data: dict, form_data: dict):
     if not _can_edit(site, state):
         return dash.no_update, f"⚠ No permission to edit {site}."
 
-    week    = CURRENT_WEEK["week_id"]
+    week    = current_week()["week_id"]
     user    = state["user"]
     is_save = triggered == "btn-save-all"
     n, errors = 0, 0
