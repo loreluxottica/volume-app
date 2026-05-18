@@ -223,44 +223,57 @@ def submit_row(
     product_line: str,
     user_id: str,
     submission_type: str,
-    values: dict[str, float | None],        # {channel_id: value_kpcs}
-    zero_flags: dict[str, bool],            # {channel_id: is_zero_flagged}
-    comments: dict[str, dict] | None = None,  # {channel_id: {presets:[..], others:..}}
+    values: dict[str, float | None],
+    zero_flags: dict[str, bool],
+    comments: dict[str, dict] | None = None,
 ) -> None:
-    """
-    Append the submission as ONE atomic multi-row INSERT (one row per channel).
-    The submissions table is append-only; `get_latest_submissions` picks the
-    most recent row per key by timestamp, so no separate official_log flip is
-    needed — which keeps the whole write a single, atomic statement.
-    """
     now = datetime.now(timezone.utc)
 
-    placeholders: list[str] = []
-    params: list = []
+    # Step 1: un-mark previous official rows (single round-trip)
+    _run(
+        """
+        UPDATE gli.volumes.submissions
+        SET official_log = FALSE
+        WHERE week_id = ?
+          AND site = ?
+          AND product_line = ?
+          AND submission_type = ?
+          AND official_log = TRUE
+        """,
+        [week_id, site, product_line, submission_type],
+    )
+
+    # Step 2: batch INSERT — one round-trip for ALL channels
+    rows_to_insert = []
     for channel, value in values.items():
         if value is None and not zero_flags.get(channel):
-            continue  # skip truly empty N/A cells
+            continue
         comment_data = (comments or {}).get(channel, {})
         presets = ",".join(comment_data.get("presets", []))
-        others  = comment_data.get("others", "") or ""
-        placeholders.append("(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE, ?, ?, FALSE, NULL)")
-        params += [
+        others = comment_data.get("others", "") or ""
+        rows_to_insert.append((
             str(uuid.uuid4()), now, week_id, site, product_line,
             user_id, submission_type, channel, value,
-            zero_flags.get(channel, False), presets, others,
-        ]
+            zero_flags.get(channel, False),
+            presets, others,
+        ))
 
-    if not placeholders:
-        return  # nothing to submit
+    if not rows_to_insert:
+        return
+
+    placeholders = ", ".join(
+        ["(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE, ?, ?, FALSE, NULL)"] * len(rows_to_insert)
+    )
+    params = [p for row in rows_to_insert for p in row]
 
     _run(
         f"""
-        INSERT INTO {_T_SUBMISSIONS}
+        INSERT INTO gli.volumes.submissions
           (submission_id, timestamp, week_id, site, product_line,
            user_id, submission_type, channel, value_kpcs,
            is_zero_flagged, official_log,
            comment_preset, comment_other, is_amendment, ref_submission_id)
-        VALUES {", ".join(placeholders)}
+        VALUES {placeholders}
         """,
         params,
     )
@@ -316,48 +329,46 @@ def save_draft(
     zero_flags: dict[str, bool],
     comments: dict[str, dict] | None = None,
 ) -> None:
-    """
-    Upsert draft rows (overwrite previous draft for same key).
-    Drafts are NOT append-only — each Save replaces the previous one.
-    """
     now = datetime.now(timezone.utc)
 
-    # Delete the existing draft for this key.
+    # Delete existing draft (single round-trip)
     _run(
-        f"""
-        DELETE FROM {_T_DRAFTS}
+        """
+        DELETE FROM gli.volumes.drafts
         WHERE week_id = ? AND site = ? AND product_line = ?
           AND submission_type = ? AND user_id = ?
         """,
         [week_id, site, product_line, submission_type, user_id],
     )
 
-    # Insert the fresh draft as ONE atomic multi-row INSERT.
-    placeholders: list[str] = []
-    params: list = []
+    # Batch INSERT all channels (single round-trip)
+    rows_to_insert = []
     for channel, value in values.items():
-        if value is None and not zero_flags.get(channel):
-            continue  # skip truly empty cells
         comment_data = (comments or {}).get(channel, {})
         presets = ",".join(comment_data.get("presets", []))
-        others  = comment_data.get("others", "") or ""
-        placeholders.append("(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-        params += [
+        others = comment_data.get("others", "") or ""
+        rows_to_insert.append((
             str(uuid.uuid4()), now, week_id, site, product_line,
             user_id, submission_type, channel, value,
-            zero_flags.get(channel, False), presets, others,
-        ]
+            zero_flags.get(channel, False),
+            presets, others,
+        ))
 
-    if not placeholders:
-        return  # draft had no values — the DELETE already cleared it
+    if not rows_to_insert:
+        return
+
+    placeholders = ", ".join(
+        ["(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"] * len(rows_to_insert)
+    )
+    params = [p for row in rows_to_insert for p in row]
 
     _run(
         f"""
-        INSERT INTO {_T_DRAFTS}
+        INSERT INTO gli.volumes.drafts
           (draft_id, saved_at, week_id, site, product_line,
            user_id, submission_type, channel, value_kpcs,
            is_zero_flagged, comment_preset, comment_other)
-        VALUES {", ".join(placeholders)}
+        VALUES {placeholders}
         """,
         params,
     )
