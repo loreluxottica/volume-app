@@ -26,7 +26,7 @@ from components.header import render_topbar, render_app_header
 from components.data_table import render_data_table
 from data import db
 from data.schema import (
-    ROWS, COLS_BY_PL, NA_BY_PL, SITES,
+    ROWS, COLS_BY_PL, na_matrix, SITES,
     COMMENT_PRESETS, THRESHOLD_ABS, THRESHOLD_REL,
 )
 # OWN_SITE / USER_ID are dev stubs below — in production they come from the
@@ -177,7 +177,7 @@ def _load_slice(state: dict, site: str, pl: str) -> None:
 
 def _db_payload(state: dict, site: str, pl: str, row_id: str):
     """Build (values, zero_flags, comments) for one row, ready for db.py."""
-    na_cols = NA_BY_PL[pl].get(row_id, [])
+    na_cols = na_matrix(site, pl).get(row_id, [])
     raw     = state["values"][site][pl][row_id]
     zf      = state["zero_flags"][site][pl][row_id]
     values, zero_flags = {}, {}
@@ -425,7 +425,7 @@ def save_row(n_clicks_list, state: dict):
     row_id = triggered["row"]
     state  = deepcopy(state)
     site, pl = state["site"], state["pl"]
-    na_cols = NA_BY_PL[pl].get(row_id, [])
+    na_cols = na_matrix(site, pl).get(row_id, [])
     cols    = COLS_BY_PL[pl]
     vals    = state["values"][site][pl][row_id]
     has_data = any(vals.get(c["id"], "") for c in cols if c["id"] not in na_cols)
@@ -462,7 +462,7 @@ def submit_row(n_clicks_list, state: dict):
     row_id = triggered["row"]
     state  = deepcopy(state)
     site, pl = state["site"], state["pl"]
-    na_cols  = NA_BY_PL[pl].get(row_id, [])
+    na_cols  = na_matrix(site, pl).get(row_id, [])
     cols     = COLS_BY_PL[pl]
     vals     = state["values"][site][pl][row_id]
     has_data = any(vals.get(c["id"], "") for c in cols if c["id"] not in na_cols)
@@ -521,7 +521,7 @@ def save_fri(n1, n2, state: dict):
 
     state  = deepcopy(state)
     site, pl = state["site"], state["pl"]
-    na_cols  = NA_BY_PL[pl].get("fri_frc", [])
+    na_cols  = na_matrix(site, pl).get("fri_frc", [])
     cols     = COLS_BY_PL[pl]
     vals     = state["values"][site][pl]["fri_frc"]
     has_data = any(vals.get(c["id"], "") for c in cols if c["id"] not in na_cols)
@@ -556,7 +556,7 @@ def submit_fri(n1, n2, state: dict):
 
     state  = deepcopy(state)
     site, pl = state["site"], state["pl"]
-    na_cols  = NA_BY_PL[pl].get("fri_frc", [])
+    na_cols  = na_matrix(site, pl).get("fri_frc", [])
     cols     = COLS_BY_PL[pl]
     vals     = state["values"][site][pl]["fri_frc"]
     mon_vals = state["values"][site][pl].get("mon_frc", {})
@@ -656,7 +656,7 @@ def bulk_action(n_save, n_submit, state: dict):
             continue
         if state["submitted"][site][pl][rid]:
             continue
-        na_cols  = NA_BY_PL[pl].get(rid, [])
+        na_cols  = na_matrix(site, pl).get(rid, [])
         cols     = COLS_BY_PL[pl]
         vals     = state["values"][site][pl][rid]
         has_data = any(vals.get(c["id"], "") for c in cols if c["id"] not in na_cols)

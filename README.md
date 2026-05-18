@@ -162,7 +162,7 @@ WHERE official_log = TRUE;
 
 ## Item aperti prima della produzione
 
-- Confermare la matrice N/A per sito (`data/schema.py` — `NA_FRAMES`/`NA_WEARABLES`)
+- Confermare etichette/colonne Wearables di Dongguan (`repl_el`, `meta`, `dummy`)
 - Confermare lo scadenzario per sito (`data/schema.py` — `DEADLINES`)
 - Mappare l'identità utente Databricks → sito e user_id (`OWN_SITE` / `USER_ID`
   in `app.py`, attualmente stub)

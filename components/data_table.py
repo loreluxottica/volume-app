@@ -16,7 +16,7 @@ from typing import Any
 from dash import html, dcc
 
 from data.schema import (
-    ROWS, COLS_BY_PL, NA_BY_PL, DEADLINES,
+    ROWS, COLS_BY_PL, na_matrix, DEADLINES,
     COMMENT_PRESETS, THRESHOLD_ABS, THRESHOLD_REL,
 )
 
@@ -445,7 +445,7 @@ def render_data_table(
     is_readonly: bool,
 ) -> html.Div:
     cols   = COLS_BY_PL[current_pl]
-    na_map = NA_BY_PL[current_pl]
+    na_map = na_matrix(current_site, current_pl)
     dl     = DEADLINES[current_site]
 
     thead_rows = render_table_header(cols, current_site, current_pl)
