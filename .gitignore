@@ -20,5 +20,6 @@ env/
 .idea/
 .vscode/
 .claude/
+.agents/
 .DS_Store
 Thumbs.db

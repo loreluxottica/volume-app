@@ -21,7 +21,7 @@ from dash import Input, Output, State, ctx, dcc, html, ALL
 
 from components.header import render_topbar, render_app_header
 from components.data_table import render_data_table
-from data import db
+from data import cache, db
 from data.schema import (
     ROWS, COLS_BY_PL, na_matrix, SITES, cols_below_threshold,
 )
@@ -55,7 +55,7 @@ def _load_access() -> dict[str, set[str]]:
     unreadable, so the app always keeps at least one admin.
     """
     try:
-        access = db.get_access()
+        access = cache.cached_access()
     except Exception as exc:
         print(f"[warn] could not load the access list: {exc}")
         access = {}
@@ -101,7 +101,7 @@ def _can_edit(site: str, state: dict) -> bool:
 
 def _load_current_week() -> dict:
     try:
-        wk = db.get_current_week()
+        wk = cache.cached_current_week()
         return {"week_id": int(wk["week_id"]), "year": int(wk["year"])}
     except Exception as exc:  # DB unavailable — app still starts
         print(f"[warn] could not load current week from DB: {exc}")
@@ -166,7 +166,7 @@ def _load_slice(state: dict, site: str, pl: str) -> bool:
     col_ids = {c["id"] for c in COLS_BY_PL[pl]}
 
     try:
-        latest = db.get_latest_submissions(week, site, pl)
+        latest = cache.cached_submissions(week, site, pl)
     except Exception as exc:
         print(f"[warn] get_latest_submissions failed for {key}: {exc}")
         return False
@@ -185,7 +185,7 @@ def _load_slice(state: dict, site: str, pl: str) -> bool:
     # Drafts are loaded for sites the user can edit.
     if _can_edit(site, state):
         try:
-            drafts = db.get_drafts(week, site, pl, user)
+            drafts = cache.cached_drafts(week, site, pl, user)
         except Exception as exc:
             print(f"[warn] get_drafts failed for {key}: {exc}")
             drafts = None
@@ -217,7 +217,7 @@ def _load_global(state: dict, pl: str) -> bool:
         return True
     col_ids = {c["id"] for c in COLS_BY_PL[pl]}
     try:
-        ext = db.get_gli_extract(CURRENT_WEEK["week_id"])
+        ext = cache.cached_gli_extract(CURRENT_WEEK["week_id"])
     except Exception as exc:
         print(f"[warn] get_gli_extract failed: {exc}")
         return False
@@ -565,9 +565,11 @@ def save_row(n_clicks_list, state: dict):
 
     row_label = next(r["label"] for r in ROWS if r["id"] == row_id)
     values, zero_flags, comments = _db_payload(state, site, pl, row_id)
+    week = CURRENT_WEEK["week_id"]
     try:
-        db.save_draft(CURRENT_WEEK["week_id"], site, pl, state["user"],
+        db.save_draft(week, site, pl, state["user"],
                       row_id, values, zero_flags, comments)
+        cache.invalidate_drafts(week, site, pl, state["user"])
     except Exception as exc:
         return dash.no_update, f"⚠ Save failed — {exc}"
 
@@ -599,10 +601,13 @@ def submit_row(n_clicks_list, state: dict):
 
     row_label = next(r["label"] for r in ROWS if r["id"] == row_id)
     values, zero_flags, comments = _db_payload(state, site, pl, row_id)
+    week = CURRENT_WEEK["week_id"]
     try:
-        db.submit_row(CURRENT_WEEK["week_id"], site, pl, state["user"],
+        db.submit_row(week, site, pl, state["user"],
                       row_id, values, zero_flags, comments)
-        db.delete_draft(CURRENT_WEEK["week_id"], site, pl, row_id, state["user"])
+        db.delete_draft(week, site, pl, row_id, state["user"])
+        cache.invalidate_submissions(week, site, pl)
+        cache.invalidate_drafts(week, site, pl, state["user"])
     except Exception as exc:
         return dash.no_update, f"⚠ Submit failed — {exc}"
 
@@ -655,9 +660,11 @@ def save_fri(n1, n2, state: dict):
         return dash.no_update, "⚠ Enter at least one value before saving."
 
     values, zero_flags, comments = _db_payload(state, site, pl, "fri_frc")
+    week = CURRENT_WEEK["week_id"]
     try:
-        db.save_draft(CURRENT_WEEK["week_id"], site, pl, state["user"],
+        db.save_draft(week, site, pl, state["user"],
                       "fri_frc", values, zero_flags, comments)
+        cache.invalidate_drafts(week, site, pl, state["user"])
     except Exception as exc:
         return dash.no_update, f"⚠ Save failed — {exc}"
 
@@ -705,10 +712,13 @@ def submit_fri(n1, n2, state: dict):
         return state, f"⚠ Comment required: {', '.join(missing_labels)}"
 
     values, zero_flags, comments = _db_payload(state, site, pl, "fri_frc")
+    week = CURRENT_WEEK["week_id"]
     try:
-        db.submit_row(CURRENT_WEEK["week_id"], site, pl, state["user"],
+        db.submit_row(week, site, pl, state["user"],
                       "fri_frc", values, zero_flags, comments)
-        db.delete_draft(CURRENT_WEEK["week_id"], site, pl, "fri_frc", state["user"])
+        db.delete_draft(week, site, pl, "fri_frc", state["user"])
+        cache.invalidate_submissions(week, site, pl)
+        cache.invalidate_drafts(week, site, pl, state["user"])
     except Exception as exc:
         return dash.no_update, f"⚠ Submit failed — {exc}"
 
@@ -780,11 +790,14 @@ def bulk_action(n_save, n_submit, state: dict):
             if is_save:
                 db.save_draft(week, site, pl, user, rid,
                               values, zero_flags, comments)
+                cache.invalidate_drafts(week, site, pl, user)
                 state["drafted"][site][pl][rid] = True
             else:
                 db.submit_row(week, site, pl, user, rid,
                               values, zero_flags, comments)
                 db.delete_draft(week, site, pl, rid, user)
+                cache.invalidate_submissions(week, site, pl)
+                cache.invalidate_drafts(week, site, pl, user)
                 state["submitted"][site][pl][rid] = True
                 state["drafted"][site][pl][rid]   = False
             n += 1

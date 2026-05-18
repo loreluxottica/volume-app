@@ -231,8 +231,8 @@ def submit_row(
 
     # Step 1: un-mark previous official rows (single round-trip)
     _run(
-        """
-        UPDATE gli.volumes.submissions
+        f"""
+        UPDATE {_T_SUBMISSIONS}
         SET official_log = FALSE
         WHERE week_id = ?
           AND site = ?
@@ -268,7 +268,7 @@ def submit_row(
 
     _run(
         f"""
-        INSERT INTO gli.volumes.submissions
+        INSERT INTO {_T_SUBMISSIONS}
           (submission_id, timestamp, week_id, site, product_line,
            user_id, submission_type, channel, value_kpcs,
            is_zero_flagged, official_log,
@@ -333,8 +333,8 @@ def save_draft(
 
     # Delete existing draft (single round-trip)
     _run(
-        """
-        DELETE FROM gli.volumes.drafts
+        f"""
+        DELETE FROM {_T_DRAFTS}
         WHERE week_id = ? AND site = ? AND product_line = ?
           AND submission_type = ? AND user_id = ?
         """,
@@ -364,7 +364,7 @@ def save_draft(
 
     _run(
         f"""
-        INSERT INTO gli.volumes.drafts
+        INSERT INTO {_T_DRAFTS}
           (draft_id, saved_at, week_id, site, product_line,
            user_id, submission_type, channel, value_kpcs,
            is_zero_flagged, comment_preset, comment_other)
