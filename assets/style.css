@@ -161,9 +161,9 @@ body {
 /* ── TABLE ────────────────────────────────────────────── */
 .table-wrap { overflow-x: auto; }
 
-/* table-layout:fixed + <colgroup> → every data column the same fixed width,
-   unchanged when switching product line. */
-.vol-table { border-collapse: collapse; table-layout: fixed; }
+/* table-layout:fixed + <colgroup> → data columns share the width equally
+   (uniform), and width:100% makes the table fill the screen. */
+.vol-table { border-collapse: collapse; table-layout: fixed; width: 100%; min-width: 1180px; }
 
 .th-section {
   background: var(--navy); color: var(--navy-text2);

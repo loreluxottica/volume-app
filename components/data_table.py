@@ -491,10 +491,11 @@ def render_data_table(
                 is_readonly=is_readonly,
             ))
 
-    # Fixed column widths so columns never resize when switching product line.
+    # Label and action columns are fixed; data columns share the remaining
+    # width equally (table-layout:fixed) — uniform and adaptive to the screen.
     colgroup = html.Colgroup(
         [html.Col(style={"width": "210px"})]
-        + [html.Col(style={"width": "90px"}) for _ in cols]
+        + [html.Col() for _ in cols]
         + [html.Col(style={"width": "190px"})]
     )
 
