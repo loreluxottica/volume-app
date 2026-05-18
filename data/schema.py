@@ -196,19 +196,32 @@ NA_BY_SITE: dict[str, dict[str, dict[str, list[str]]]] = {
 }
 
 
-# GLOBAL — read-only view summing every plant cell by cell. A cell is N/A
-# only when N/A for every plant (if any plant uses it, the sum has a value).
-def _na_intersection(pl: str) -> dict[str, list[str]]:
-    out: dict[str, list[str]] = {}
-    for rid in ROW_IDS:
-        per_plant = [set(NA_BY_SITE[s][pl].get(rid, [])) for s in NA_BY_SITE]
-        out[rid] = sorted(set.intersection(*per_plant)) if per_plant else []
-    return out
-
-
+# GLOBAL — read-only view summing every plant cell by cell. It has its own
+# N/A matrix (not derived from the plants): in Frames only `whls_net` is N/A,
+# for siop / eow_wip / wip_ot; Wearables has no N/A cell.
+NA_GLOBAL_FRAMES: dict[str, list[str]] = {
+    "py":      [],
+    "siop":    ["whls_net"],
+    "mon_frc": [],
+    "thu_frc": [],
+    "fri_frc": [],
+    "actual":  [],
+    "eow_wip": ["whls_net"],
+    "wip_ot":  ["whls_net"],
+}
+NA_GLOBAL_WEARABLES: dict[str, list[str]] = {
+    "py":      [],
+    "siop":    [],
+    "mon_frc": [],
+    "thu_frc": [],
+    "fri_frc": [],
+    "actual":  [],
+    "eow_wip": [],
+    "wip_ot":  [],
+}
 NA_BY_SITE["GLOBAL"] = {
-    "FRAMES":    _na_intersection("FRAMES"),
-    "WEARABLES": _na_intersection("WEARABLES"),
+    "FRAMES":    NA_GLOBAL_FRAMES,
+    "WEARABLES": NA_GLOBAL_WEARABLES,
 }
 
 
