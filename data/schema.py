@@ -270,3 +270,31 @@ COMMENT_TRIGGER_PAIRS = [
     ("fri_frc", "mon_frc"),
     ("actual",  "mon_frc"),
 ]
+
+
+def cols_below_threshold(fri_values: dict, mon_values: dict,
+                         na_cols: list[str], cols: list[dict]) -> list[str]:
+    """
+    Column ids where the Friday-vs-Monday drop crosses the comment threshold
+    (>= THRESHOLD_ABS Kpcs, or >= THRESHOLD_REL of Monday). Shared by the data
+    table (cell highlighting) and the submit-time comment validation — keep a
+    single definition so the two never drift.
+    """
+    result: list[str] = []
+    for col in cols:
+        cid = col["id"]
+        if cid in na_cols:
+            continue
+        fri_raw = fri_values.get(cid, "")
+        mon_raw = mon_values.get(cid, "")
+        if fri_raw == "" or mon_raw == "":
+            continue
+        try:
+            fri = float(fri_raw or 0)
+            mon = float(mon_raw or 0)
+        except (TypeError, ValueError):
+            continue
+        diff = mon - fri
+        if diff >= THRESHOLD_ABS or (mon > 0 and diff / mon >= THRESHOLD_REL):
+            result.append(cid)
+    return result

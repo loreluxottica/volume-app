@@ -17,7 +17,7 @@ from dash import html, dcc
 
 from data.schema import (
     ROWS, COLS_BY_PL, na_matrix, DEADLINES,
-    COMMENT_PRESETS, THRESHOLD_ABS, THRESHOLD_REL,
+    COMMENT_PRESETS, cols_below_threshold,
 )
 
 
@@ -33,31 +33,6 @@ def _dot_color(row_id: str, submitted: dict, drafted: dict) -> str:
     if drafted.get(row_id):
         return "--dot-draft"
     return "--dot-green"
-
-
-def _cols_below_threshold(
-    fri_values: dict[str, str],
-    mon_values: dict[str, str],
-    na_cols: list[str],
-    all_cols: list[dict],
-) -> list[str]:
-    """Return column IDs where Friday vs Monday exceeds 10k or 10%."""
-    result = []
-    for col in all_cols:
-        cid = col["id"]
-        if cid in na_cols:
-            continue
-        try:
-            fri = float(fri_values.get(cid, "") or 0)
-            mon = float(mon_values.get(cid, "") or 0)
-        except ValueError:
-            continue
-        if fri_values.get(cid, "") == "" or mon_values.get(cid, "") == "":
-            continue
-        diff = mon - fri
-        if diff >= THRESHOLD_ABS or (mon > 0 and diff / mon >= THRESHOLD_REL):
-            result.append(cid)
-    return result
 
 
 # ── summary bar ───────────────────────────────────────────────────────────────
@@ -116,7 +91,7 @@ def render_friday_panel(
     zero_flags: dict[str, bool],
     submit_attempted: bool,
 ) -> html.Div:
-    below_ids = set(_cols_below_threshold(fri_values, mon_values, na_cols, cols))
+    below_ids = set(cols_below_threshold(fri_values, mon_values, na_cols, cols))
 
     missing = [
         cid for cid in below_ids
@@ -372,7 +347,7 @@ def render_friday_row(
     deadline: str,
     is_readonly: bool,
 ) -> html.Tr:
-    below_ids = set(_cols_below_threshold(fri_values, mon_values, na_cols, cols))
+    below_ids = set(cols_below_threshold(fri_values, mon_values, na_cols, cols))
 
     dot_var = _dot_color("fri_frc", {"fri_frc": is_submitted}, {"fri_frc": is_drafted})
     row_cls = "data-row" + (" is-submitted" if is_submitted else " is-draft" if is_drafted else "")

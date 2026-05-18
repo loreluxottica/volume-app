@@ -176,18 +176,22 @@ def get_submissions(week_id: int, site: str, product_line: str) -> pd.DataFrame:
 
 def get_latest_submissions(week_id: int, site: str, product_line: str) -> pd.DataFrame:
     """
-    Return only the authoritative (official_log = TRUE) submission per
-    (submission_type, channel) key.  This is what the UI displays.
+    Return the latest submission per (submission_type, channel) key — the most
+    recent row by timestamp. This is what the UI displays.
     """
     return _exec(
         f"""
         SELECT submission_type, channel, value_kpcs,
                is_zero_flagged, comment_preset, comment_other
-        FROM {_T_SUBMISSIONS}
-        WHERE week_id = ?
-          AND site = ?
-          AND product_line = ?
-          AND official_log = TRUE
+        FROM (
+            SELECT *, ROW_NUMBER() OVER (
+                PARTITION BY submission_type, channel
+                ORDER BY timestamp DESC
+            ) AS _rn
+            FROM {_T_SUBMISSIONS}
+            WHERE week_id = ? AND site = ? AND product_line = ?
+        )
+        WHERE _rn = 1
         """,
         [week_id, site, product_line],
     )
@@ -204,50 +208,42 @@ def submit_row(
     comments: dict[str, dict] | None = None,  # {channel_id: {presets:[..], others:..}}
 ) -> None:
     """
-    Append one row per channel to the submissions table.
-    Marks previous official_log rows for the same key as FALSE before inserting.
-    Uses a single transaction-like batch (Delta Lake ACID guarantees atomicity).
+    Append the submission as ONE atomic multi-row INSERT (one row per channel).
+    The submissions table is append-only; `get_latest_submissions` picks the
+    most recent row per key by timestamp, so no separate official_log flip is
+    needed — which keeps the whole write a single, atomic statement.
     """
     now = datetime.now(timezone.utc)
 
-    # Step 1: un-mark previous official rows for this (week, site, pl, type)
-    _run(
-        f"""
-        UPDATE {_T_SUBMISSIONS}
-        SET official_log = FALSE
-        WHERE week_id = ?
-          AND site = ?
-          AND product_line = ?
-          AND submission_type = ?
-          AND official_log = TRUE
-        """,
-        [week_id, site, product_line, submission_type],
-    )
-
-    # Step 2: insert one row per channel
+    placeholders: list[str] = []
+    params: list = []
     for channel, value in values.items():
         if value is None and not zero_flags.get(channel):
             continue  # skip truly empty N/A cells
         comment_data = (comments or {}).get(channel, {})
         presets = ",".join(comment_data.get("presets", []))
         others  = comment_data.get("others", "") or ""
+        placeholders.append("(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE, ?, ?, FALSE, NULL)")
+        params += [
+            str(uuid.uuid4()), now, week_id, site, product_line,
+            user_id, submission_type, channel, value,
+            zero_flags.get(channel, False), presets, others,
+        ]
 
-        _run(
-            f"""
-            INSERT INTO {_T_SUBMISSIONS}
-              (submission_id, timestamp, week_id, site, product_line,
-               user_id, submission_type, channel, value_kpcs,
-               is_zero_flagged, official_log,
-               comment_preset, comment_other, is_amendment, ref_submission_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE, ?, ?, FALSE, NULL)
-            """,
-            [
-                str(uuid.uuid4()), now, week_id, site, product_line,
-                user_id, submission_type, channel, value,
-                zero_flags.get(channel, False),
-                presets, others,
-            ],
-        )
+    if not placeholders:
+        return  # nothing to submit
+
+    _run(
+        f"""
+        INSERT INTO {_T_SUBMISSIONS}
+          (submission_id, timestamp, week_id, site, product_line,
+           user_id, submission_type, channel, value_kpcs,
+           is_zero_flagged, official_log,
+           comment_preset, comment_other, is_amendment, ref_submission_id)
+        VALUES {", ".join(placeholders)}
+        """,
+        params,
+    )
 
 
 # ── drafts ────────────────────────────────────────────────────────────────────
@@ -306,7 +302,7 @@ def save_draft(
     """
     now = datetime.now(timezone.utc)
 
-    # Delete existing draft for this key
+    # Delete the existing draft for this key.
     _run(
         f"""
         DELETE FROM {_T_DRAFTS}
@@ -316,26 +312,35 @@ def save_draft(
         [week_id, site, product_line, submission_type, user_id],
     )
 
-    # Insert fresh rows
+    # Insert the fresh draft as ONE atomic multi-row INSERT.
+    placeholders: list[str] = []
+    params: list = []
     for channel, value in values.items():
+        if value is None and not zero_flags.get(channel):
+            continue  # skip truly empty cells
         comment_data = (comments or {}).get(channel, {})
         presets = ",".join(comment_data.get("presets", []))
         others  = comment_data.get("others", "") or ""
-        _run(
-            f"""
-            INSERT INTO {_T_DRAFTS}
-              (draft_id, saved_at, week_id, site, product_line,
-               user_id, submission_type, channel, value_kpcs,
-               is_zero_flagged, comment_preset, comment_other)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            [
-                str(uuid.uuid4()), now, week_id, site, product_line,
-                user_id, submission_type, channel, value,
-                zero_flags.get(channel, False),
-                presets, others,
-            ],
-        )
+        placeholders.append("(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+        params += [
+            str(uuid.uuid4()), now, week_id, site, product_line,
+            user_id, submission_type, channel, value,
+            zero_flags.get(channel, False), presets, others,
+        ]
+
+    if not placeholders:
+        return  # draft had no values — the DELETE already cleared it
+
+    _run(
+        f"""
+        INSERT INTO {_T_DRAFTS}
+          (draft_id, saved_at, week_id, site, product_line,
+           user_id, submission_type, channel, value_kpcs,
+           is_zero_flagged, comment_preset, comment_other)
+        VALUES {", ".join(placeholders)}
+        """,
+        params,
+    )
 
 
 def delete_draft(week_id: int, site: str, product_line: str,
@@ -356,16 +361,23 @@ def delete_draft(week_id: int, site: str, product_line: str,
 def get_gli_extract(week_id: int) -> pd.DataFrame:
     """
     Return the full extract for a given week (all sites, both PLs) — the latest
-    official value per key. Reads the submissions table directly (official_log
-    = TRUE) so it does not depend on a separate SQL view.
+    value per key, picked by most recent timestamp. One query; used both by the
+    Excel Dashboard and by the in-app GLOBAL view.
     """
     return _exec(
         f"""
         SELECT week_id, site, product_line, submission_type,
-               channel, value_kpcs, comment_preset, comment_other
-        FROM {_T_SUBMISSIONS}
-        WHERE week_id = ?
-          AND official_log = TRUE
+               channel, value_kpcs, is_zero_flagged,
+               comment_preset, comment_other
+        FROM (
+            SELECT *, ROW_NUMBER() OVER (
+                PARTITION BY site, product_line, submission_type, channel
+                ORDER BY timestamp DESC
+            ) AS _rn
+            FROM {_T_SUBMISSIONS}
+            WHERE week_id = ?
+        )
+        WHERE _rn = 1
         ORDER BY site, product_line, submission_type, channel
         """,
         [week_id],

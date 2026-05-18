@@ -3,34 +3,28 @@
 # Entry point for the Volumes Data Entry Tool Databricks App.
 #
 # Run locally:
-#   pip install dash databricks-sql-connector pandas
-#   python app.py
+#   pip install -r requirements.txt
+#   python app.py            # http://localhost:8050
 #
-# Deploy on Databricks Apps:
-#   - Set DATABRICKS_HOST, DATABRICKS_HTTP_PATH, DATABRICKS_TOKEN env vars
-#     (injected automatically when deployed as a Databricks App)
-#   - Upload this folder as the app source
-#   - Set app.py as the entry point
+# On Databricks Apps the app is served by gunicorn (`app:server`, see app.yaml);
+# DATABRICKS_HOST / OAuth creds / DATABRICKS_HTTP_PATH are provided by the
+# platform. The signed-in user is read from the request headers (see
+# _current_user); data access is resolved per user (see _can_edit).
 # ─────────────────────────────────────────────────────────────────────────────
 
 from __future__ import annotations
 
 import json
-from copy import deepcopy
-from datetime import datetime
 
 import dash
-from dash import Input, Output, State, ctx, dcc, html, ALL, MATCH
+from dash import Input, Output, State, ctx, dcc, html, ALL
 
 from components.header import render_topbar, render_app_header
 from components.data_table import render_data_table
 from data import db
 from data.schema import (
-    ROWS, COLS_BY_PL, na_matrix, SITES,
-    COMMENT_PRESETS, THRESHOLD_ABS, THRESHOLD_REL,
+    ROWS, COLS_BY_PL, na_matrix, SITES, cols_below_threshold,
 )
-# OWN_SITE / USER_ID are dev stubs below — in production they come from the
-# Databricks user identity (see README open items).
 
 # ── App init ──────────────────────────────────────────────────────────────────
 
@@ -47,29 +41,53 @@ app = dash.Dash(
 # WSGI entry point for gunicorn on Databricks Apps (`app:server` in app.yaml)
 server = app.server
 
-# DEV STUBS — in production these come from the Databricks user identity.
-OWN_SITE  = "SEDICO"          # site shown on load
-USER_ID   = "dev-user"
-USER_NAME = "Lorenzo Muscillo"
+# ── Identity & access ─────────────────────────────────────────────────────────
 
-# Pseudo-site: a read-only view summing every plant cell by cell.
-GLOBAL_SITE = "GLOBAL"
+OWN_SITE    = "SEDICO"     # site shown on load
+GLOBAL_SITE = "GLOBAL"     # pseudo-site: read-only sum of every plant
+DEV_USER    = "lorenzo.muscillo@luxottica.com"  # fallback when no identity header
 
-# TEST MODE: every site is editable for everyone. Per-table access is enforced
-# in the backend (Unity Catalog grants). Set this False once per-user site
-# permissions exist, so users may only edit their own site.
-EDIT_ALL_SITES = True
+# Users allowed to edit every site. Everyone else is limited to their own site
+# (the identity→site mapping for non-admins is still an open item).
+ADMIN_USERS = {"lorenzo.muscillo@luxottica.com"}
+
+# Refreshed from the DB by the bootstrap callback on every page load.
+CURRENT_WEEK = {"week_id": 0, "year": 0}
 
 
-def _can_edit(site: str) -> bool:
+def _current_user() -> str:
+    """
+    The signed-in user's email — from the Databricks Apps request headers
+    (`X-Forwarded-Email`), or a dev fallback when running locally.
+    """
+    try:
+        from flask import request, has_request_context
+        if has_request_context():
+            email = (request.headers.get("X-Forwarded-Email")
+                     or request.headers.get("X-Forwarded-Preferred-Username")
+                     or request.headers.get("X-Forwarded-User"))
+            if email:
+                return email.strip().lower()
+    except Exception:
+        pass
+    return DEV_USER
+
+
+def _display_name(email: str) -> str:
+    """`mario.rossi@x.com` → `Mario Rossi`."""
+    local = (email or "").split("@")[0]
+    parts = [p for p in local.replace("_", ".").split(".") if p]
+    return " ".join(p.capitalize() for p in parts) or "User"
+
+
+def _can_edit(site: str, state: dict) -> bool:
     """Whether the current user may edit the given site."""
     if site == GLOBAL_SITE:
         return False
-    return EDIT_ALL_SITES or site == OWN_SITE
+    if state.get("is_admin"):
+        return True
+    return site == OWN_SITE   # non-admins: own site only (mapping is an open item)
 
-
-# ── Current week ──────────────────────────────────────────────────────────────
-# The open week is owned by the DB (weeks table, set by the Tuesday job).
 
 def _load_current_week() -> dict:
     try:
@@ -78,9 +96,6 @@ def _load_current_week() -> dict:
     except Exception as exc:  # DB unavailable — app still starts
         print(f"[warn] could not load current week from DB: {exc}")
         return {"week_id": 0, "year": 0}
-
-
-CURRENT_WEEK = _load_current_week()
 
 
 # ── DB ↔ state helpers ────────────────────────────────────────────────────────
@@ -127,23 +142,24 @@ def _apply_comment(fri_comments_pl: dict, cid: str, row) -> None:
     fri_comments_pl[cid]["others"]  = _cell_str(row.get("comment_other"))
 
 
-def _load_slice(state: dict, site: str, pl: str) -> None:
+def _load_slice(state: dict, site: str, pl: str) -> bool:
     """
-    Populate state[...][site][pl] from the DB. No-op if the slice is already
-    loaded; on a DB read error the slice is left empty and NOT marked loaded
-    (so it is retried the next time it is viewed).
+    Populate state[...][site][pl] from the DB. Returns False if the submissions
+    read fails (caller can warn the user); the slice is then left empty and not
+    marked loaded, so it is retried the next time it is viewed.
     """
     key = f"{site}|{pl}"
     if key in state["loaded"]:
-        return
+        return True
     week    = CURRENT_WEEK["week_id"]
+    user    = state.get("user") or DEV_USER
     col_ids = {c["id"] for c in COLS_BY_PL[pl]}
 
     try:
         latest = db.get_latest_submissions(week, site, pl)
     except Exception as exc:
         print(f"[warn] get_latest_submissions failed for {key}: {exc}")
-        return
+        return False
 
     for _, r in latest.iterrows():
         rid, cid = r["submission_type"], r["channel"]
@@ -157,9 +173,9 @@ def _load_slice(state: dict, site: str, pl: str) -> None:
             _apply_comment(state["fri_comments"][site][pl], cid, r)
 
     # Drafts are loaded for sites the user can edit.
-    if _can_edit(site):
+    if _can_edit(site, state):
         try:
-            drafts = db.get_drafts(week, site, pl, USER_ID)
+            drafts = db.get_drafts(week, site, pl, user)
         except Exception as exc:
             print(f"[warn] get_drafts failed for {key}: {exc}")
             drafts = None
@@ -178,33 +194,57 @@ def _load_slice(state: dict, site: str, pl: str) -> None:
                     _apply_comment(state["fri_comments"][site][pl], cid, r)
 
     state["loaded"].append(key)
+    return True
 
 
-def _load_for_view(state: dict, site: str, pl: str) -> None:
-    """Load the DB slice(s) needed to render a site view — all plants for GLOBAL."""
+def _load_global(state: dict, pl: str) -> bool:
+    """
+    Sum every plant's submitted data cell by cell for the GLOBAL view — one
+    `get_gli_extract` query instead of a per-plant fan-out. Returns False on a
+    DB read error.
+    """
+    if pl in state["global_loaded"]:
+        return True
+    col_ids = {c["id"] for c in COLS_BY_PL[pl]}
+    try:
+        ext = db.get_gli_extract(CURRENT_WEEK["week_id"])
+    except Exception as exc:
+        print(f"[warn] get_gli_extract failed: {exc}")
+        return False
+
+    sums: dict = {r["id"]: {} for r in ROWS}
+    for _, r in ext.iterrows():
+        if r["product_line"] != pl:
+            continue
+        rid, cid = r["submission_type"], r["channel"]
+        if rid not in sums or cid not in col_ids:
+            continue
+        v = _to_float(r["value_kpcs"])
+        if v is None:
+            continue
+        sums[rid][cid] = sums[rid].get(cid, 0.0) + v
+
+    state["global"][pl] = {
+        rid: {cid: _fmt(val) for cid, val in cells.items()}
+        for rid, cells in sums.items()
+    }
+    state["global_loaded"].append(pl)
+    return True
+
+
+def _load_for_view(state: dict, site: str, pl: str) -> bool:
+    """Load the DB data needed to render a site view. Returns False on error."""
     if site == GLOBAL_SITE:
-        for s in SITES:
-            _load_slice(state, s, pl)
-    else:
-        _load_slice(state, site, pl)
+        return _load_global(state, pl)
+    return _load_slice(state, site, pl)
 
 
-def _global_values(state: dict, pl: str) -> dict:
-    """Sum every plant's grid cell by cell — the GLOBAL read-only view."""
-    out: dict = {}
-    for row in ROWS:
-        rid = row["id"]
-        out[rid] = {}
-        for c in COLS_BY_PL[pl]:
-            cid = c["id"]
-            total, has_any = 0.0, False
-            for s in SITES:
-                v = _to_float(state["values"][s][pl][rid].get(cid, ""))
-                if v is not None:
-                    total += v
-                    has_any = True
-            out[rid][cid] = _fmt(total) if has_any else ""
-    return out
+def _row_has_data(state: dict, site: str, pl: str, row_id: str) -> bool:
+    """True if the row has at least one non-empty, non-N/A cell."""
+    na_cols = na_matrix(site, pl).get(row_id, [])
+    vals    = state["values"][site][pl][row_id]
+    return any(vals.get(c["id"], "") for c in COLS_BY_PL[pl]
+               if c["id"] not in na_cols)
 
 
 def _db_payload(state: dict, site: str, pl: str, row_id: str):
@@ -231,19 +271,25 @@ def _db_payload(state: dict, site: str, pl: str, row_id: str):
 
 def _empty_state() -> dict:
     """
-    Return a fresh client-side state dict stored in dcc.Store, pre-loaded
-    with the user's own site (Frames) from the DB.
+    Fresh client-side state for dcc.Store — an empty skeleton. The current
+    week, the user identity and the initial slice are loaded by the bootstrap
+    callback on page load (which runs inside a request context).
     """
     state: dict = {
         "site":           OWN_SITE,
         "pl":             "FRAMES",
         "fri_open":       False,
         "submit_attempted": False,
+        "user":           "",      # signed-in email (set by bootstrap)
+        "is_admin":       False,
+        "booted":         False,
         "values":         {},   # {site: {pl: {row_id: {col_id: value}}}}
         "submitted":      {},   # {site: {pl: {row_id: bool}}}
         "drafted":        {},   # {site: {pl: {row_id: bool}}}
         "zero_flags":     {},   # {site: {pl: {row_id: {col_id: bool}}}}
         "fri_comments":   {},   # {site: {pl: {col_id: {presets:[], others:""}}}}
+        "global":         {"FRAMES": {}, "WEARABLES": {}},  # summed GLOBAL view
+        "global_loaded":  [],   # ["FRAMES"/"WEARABLES"] product lines summed
         "loaded":         [],   # ["site|pl", ...] slices fetched from the DB
     }
     for s in SITES:
@@ -260,24 +306,21 @@ def _empty_state() -> dict:
             state["zero_flags"][s][pl]   = {r["id"]: {c["id"]: False for c in cols} for r in ROWS}
             state["fri_comments"][s][pl] = {c["id"]: {"presets": [], "others": ""} for c in cols}
 
-    # Pre-load the default view (own site, Frames) from the DB.
-    _load_slice(state, OWN_SITE, "FRAMES")
-
     return state
 
 
 # ── Layout ────────────────────────────────────────────────────────────────────
 
 app.layout = html.Div([
-    # Client-side state store (replaces JS module-level vars from the mockup)
+    # Client-side state store
     dcc.Store(id="app-state", data=_empty_state()),
     # Toast notification store
     dcc.Store(id="toast-store", data=""),
+    # Fires once on page load → the bootstrap callback (runs in a request ctx)
+    dcc.Interval(id="boot-trigger", interval=200, max_intervals=1),
 
-    # Topbar (static — user identity doesn't change mid-session)
-    render_topbar(USER_NAME),
-
-    # Dynamic section — re-rendered on every state change
+    # Topbar + dynamic section — re-rendered on every state change
+    html.Div(id="topbar-container"),
     html.Div(id="app-header-container"),
     html.Div(id="app-body-container"),
 
@@ -286,28 +329,64 @@ app.layout = html.Div([
 ])
 
 
-# ── Main render callback ──────────────────────────────────────────────────────
-# Re-renders header + body whenever app-state changes.
+# ── Bootstrap ─────────────────────────────────────────────────────────────────
+# Runs once per page load, inside a Flask request context: resolves the current
+# week and the signed-in user, then loads the initial view.
 
 @app.callback(
+    Output("app-state",   "data", allow_duplicate=True),
+    Output("toast-store", "data", allow_duplicate=True),
+    Input("boot-trigger", "n_intervals"),
+    State("app-state", "data"),
+    prevent_initial_call=True,
+)
+def bootstrap(_n, state: dict):
+    if state.get("booted"):
+        return dash.no_update, dash.no_update
+
+    global CURRENT_WEEK
+    CURRENT_WEEK = _load_current_week()
+
+    user = _current_user()
+    state["user"]     = user
+    state["is_admin"] = user in ADMIN_USERS
+
+    ok = _load_for_view(state, state["site"], state["pl"])
+    state["booted"] = True
+    return state, ("" if ok else "⚠ Could not load data from the database.")
+
+
+# ── Main render callback ──────────────────────────────────────────────────────
+
+@app.callback(
+    Output("topbar-container",     "children"),
     Output("app-header-container", "children"),
     Output("app-body-container",   "children"),
     Input("app-state", "data"),
 )
 def render_ui(state: dict):
-    site      = state["site"]
-    pl        = state["pl"]
-    is_ro     = not _can_edit(site)
-    fri_open  = state["fri_open"]
-    sa        = state["submit_attempted"]
+    topbar = render_topbar(_display_name(state.get("user", "")))
+
+    if not state.get("booted"):
+        loading = html.Div(
+            "Loading data…",
+            style={"padding": "40px 24px", "color": "var(--text-3)",
+                   "fontSize": "13px"},
+        )
+        return topbar, html.Div(), loading
+
+    site     = state["site"]
+    pl       = state["pl"]
+    is_ro    = not _can_edit(site, state)
+    fri_open = state["fri_open"]
+    sa       = state["submit_attempted"]
 
     if site == GLOBAL_SITE:
         # Read-only summed view — no per-row draft/submit state.
-        values    = _global_values(state, pl)
+        values    = state["global"].get(pl, {})
         submitted = {r["id"]: False for r in ROWS}
         drafted   = {r["id"]: False for r in ROWS}
-        zf        = {}
-        fc        = {}
+        zf, fc    = {}, {}
     else:
         submitted = state["submitted"][site][pl]
         drafted   = state["drafted"][site][pl]
@@ -328,46 +407,48 @@ def render_ui(state: dict):
         fri_open=fri_open, submit_attempted=sa,
         is_readonly=is_ro,
     )
-    return header, body
+    return topbar, header, body
 
 
 # ── Site selector callback ────────────────────────────────────────────────────
 
 @app.callback(
-    Output("app-state", "data", allow_duplicate=True),
+    Output("app-state",   "data", allow_duplicate=True),
+    Output("toast-store", "data", allow_duplicate=True),
     Input("site-select", "value"),
     State("app-state", "data"),
     prevent_initial_call=True,
 )
-def change_site(site: str, state: dict) -> dict:
-    if site and site != state["site"]:
-        state = deepcopy(state)
-        state["site"]     = site
-        state["fri_open"] = False
-        state["submit_attempted"] = False
-        _load_for_view(state, site, state["pl"])
-    return state
+def change_site(site: str, state: dict):
+    if not site or site == state["site"]:
+        return dash.no_update, dash.no_update
+    state["site"]     = site
+    state["fri_open"] = False
+    state["submit_attempted"] = False
+    ok = _load_for_view(state, site, state["pl"])
+    return state, ("" if ok else f"⚠ Could not load data for {site}.")
 
 
 # ── Product line tab callbacks ────────────────────────────────────────────────
 
 @app.callback(
-    Output("app-state", "data", allow_duplicate=True),
+    Output("app-state",   "data", allow_duplicate=True),
+    Output("toast-store", "data", allow_duplicate=True),
     Input("tab-frames",    "n_clicks"),
     Input("tab-wearables", "n_clicks"),
     State("app-state", "data"),
     prevent_initial_call=True,
 )
-def switch_pl(n_frames, n_wear, state: dict) -> dict:
+def switch_pl(n_frames, n_wear, state: dict):
     triggered = ctx.triggered_id
     new_pl = "FRAMES" if triggered == "tab-frames" else "WEARABLES"
-    if new_pl != state["pl"]:
-        state = deepcopy(state)
-        state["pl"]       = new_pl
-        state["fri_open"] = False
-        state["submit_attempted"] = False
-        _load_for_view(state, state["site"], new_pl)
-    return state
+    if new_pl == state["pl"]:
+        return dash.no_update, dash.no_update
+    state["pl"]       = new_pl
+    state["fri_open"] = False
+    state["submit_attempted"] = False
+    ok = _load_for_view(state, state["site"], new_pl)
+    return state, ("" if ok else "⚠ Could not load data.")
 
 
 # ── Row-level input callback ──────────────────────────────────────────────────
@@ -378,16 +459,14 @@ def switch_pl(n_frames, n_wear, state: dict) -> dict:
     State("app-state", "data"),
     prevent_initial_call=True,
 )
-def update_row_values(values, state: dict) -> dict:
-    if not ctx.triggered:
+def update_row_values(values, state: dict):
+    if not ctx.triggered or not _can_edit(state["site"], state):
         return dash.no_update
-    state = deepcopy(state)
     site, pl = state["site"], state["pl"]
     for trigger in ctx.triggered:
         prop_id = trigger["prop_id"]
         # Parse pattern-matching id: {"type":"row-input","row":"mon_frc","col":"inbound"}.value
-        id_part = prop_id.split(".")[0]
-        id_dict = json.loads(id_part)
+        id_dict = json.loads(prop_id.split(".")[0])
         row_id, col_id = id_dict["row"], id_dict["col"]
         val = trigger["value"]
         state["values"][site][pl][row_id][col_id] = str(val) if val is not None else ""
@@ -405,16 +484,13 @@ def update_row_values(values, state: dict) -> dict:
     State("app-state", "data"),
     prevent_initial_call=True,
 )
-def update_fri_values(fri_vals, fri_zeros, fri_presets, fri_others, state: dict) -> dict:
-    if not ctx.triggered:
+def update_fri_values(fri_vals, fri_zeros, fri_presets, fri_others, state: dict):
+    if not ctx.triggered or not _can_edit(state["site"], state):
         return dash.no_update
-    state = deepcopy(state)
     site, pl = state["site"], state["pl"]
 
     for trigger in ctx.triggered:
-        prop_id = trigger["prop_id"]
-        id_part = prop_id.split(".")[0]
-        id_dict = json.loads(id_part)
+        id_dict = json.loads(trigger["prop_id"].split(".")[0])
         t       = id_dict["type"]
         col_id  = id_dict["col"]
         val     = trigger["value"]
@@ -442,18 +518,18 @@ def update_fri_values(fri_vals, fri_zeros, fri_presets, fri_others, state: dict)
     State("app-state", "data"),
     prevent_initial_call=True,
 )
-def toggle_fri_panel(n, state: dict) -> dict:
-    if n:
-        state = deepcopy(state)
-        state["fri_open"] = not state["fri_open"]
+def toggle_fri_panel(n, state: dict):
+    if not n:
+        return dash.no_update
+    state["fri_open"] = not state["fri_open"]
     return state
 
 
 # ── Save row ──────────────────────────────────────────────────────────────────
 
 @app.callback(
-    Output("app-state",   "data",    allow_duplicate=True),
-    Output("toast-store", "data",    allow_duplicate=True),
+    Output("app-state",   "data", allow_duplicate=True),
+    Output("toast-store", "data", allow_duplicate=True),
     Input({"type": "btn-save", "row": ALL}, "n_clicks"),
     State("app-state", "data"),
     prevent_initial_call=True,
@@ -463,24 +539,21 @@ def save_row(n_clicks_list, state: dict):
     if not triggered or not any(n_clicks_list):
         return dash.no_update, dash.no_update
 
-    row_id = triggered["row"]
-    state  = deepcopy(state)
     site, pl = state["site"], state["pl"]
-    na_cols = na_matrix(site, pl).get(row_id, [])
-    cols    = COLS_BY_PL[pl]
-    vals    = state["values"][site][pl][row_id]
-    has_data = any(vals.get(c["id"], "") for c in cols if c["id"] not in na_cols)
+    if not _can_edit(site, state):
+        return dash.no_update, f"⚠ No permission to edit {site}."
 
-    if not has_data:
-        return state, "⚠ Enter at least one value before saving."
+    row_id = triggered["row"]
+    if not _row_has_data(state, site, pl, row_id):
+        return dash.no_update, "⚠ Enter at least one value before saving."
 
     row_label = next(r["label"] for r in ROWS if r["id"] == row_id)
     values, zero_flags, comments = _db_payload(state, site, pl, row_id)
     try:
-        db.save_draft(CURRENT_WEEK["week_id"], site, pl, USER_ID,
+        db.save_draft(CURRENT_WEEK["week_id"], site, pl, state["user"],
                       row_id, values, zero_flags, comments)
     except Exception as exc:
-        return state, f"⚠ Save failed — {exc}"
+        return dash.no_update, f"⚠ Save failed — {exc}"
 
     state["drafted"][site][pl][row_id] = True
     return state, f"⤓ {row_label} — draft saved"
@@ -489,8 +562,8 @@ def save_row(n_clicks_list, state: dict):
 # ── Submit row ────────────────────────────────────────────────────────────────
 
 @app.callback(
-    Output("app-state",   "data",    allow_duplicate=True),
-    Output("toast-store", "data",    allow_duplicate=True),
+    Output("app-state",   "data", allow_duplicate=True),
+    Output("toast-store", "data", allow_duplicate=True),
     Input({"type": "btn-submit", "row": ALL}, "n_clicks"),
     State("app-state", "data"),
     prevent_initial_call=True,
@@ -500,25 +573,22 @@ def submit_row(n_clicks_list, state: dict):
     if not triggered or not any(n_clicks_list):
         return dash.no_update, dash.no_update
 
-    row_id = triggered["row"]
-    state  = deepcopy(state)
     site, pl = state["site"], state["pl"]
-    na_cols  = na_matrix(site, pl).get(row_id, [])
-    cols     = COLS_BY_PL[pl]
-    vals     = state["values"][site][pl][row_id]
-    has_data = any(vals.get(c["id"], "") for c in cols if c["id"] not in na_cols)
+    if not _can_edit(site, state):
+        return dash.no_update, f"⚠ No permission to edit {site}."
 
-    if not has_data:
-        return state, "⚠ Enter at least one value before submitting."
+    row_id = triggered["row"]
+    if not _row_has_data(state, site, pl, row_id):
+        return dash.no_update, "⚠ Enter at least one value before submitting."
 
     row_label = next(r["label"] for r in ROWS if r["id"] == row_id)
     values, zero_flags, comments = _db_payload(state, site, pl, row_id)
     try:
-        db.submit_row(CURRENT_WEEK["week_id"], site, pl, USER_ID,
+        db.submit_row(CURRENT_WEEK["week_id"], site, pl, state["user"],
                       row_id, values, zero_flags, comments)
-        db.delete_draft(CURRENT_WEEK["week_id"], site, pl, row_id, USER_ID)
+        db.delete_draft(CURRENT_WEEK["week_id"], site, pl, row_id, state["user"])
     except Exception as exc:
-        return state, f"⚠ Submit failed — {exc}"
+        return dash.no_update, f"⚠ Submit failed — {exc}"
 
     state["submitted"][site][pl][row_id] = True
     state["drafted"][site][pl][row_id]   = False
@@ -528,8 +598,8 @@ def submit_row(n_clicks_list, state: dict):
 # ── Change submission (re-open) ───────────────────────────────────────────────
 
 @app.callback(
-    Output("app-state",   "data",    allow_duplicate=True),
-    Output("toast-store", "data",    allow_duplicate=True),
+    Output("app-state",   "data", allow_duplicate=True),
+    Output("toast-store", "data", allow_duplicate=True),
     Input({"type": "btn-change", "row": ALL}, "n_clicks"),
     State("app-state", "data"),
     prevent_initial_call=True,
@@ -539,18 +609,19 @@ def change_submission(n_clicks_list, state: dict):
     if not triggered or not any(n_clicks_list):
         return dash.no_update, dash.no_update
 
-    row_id = triggered["row"]
-    state  = deepcopy(state)
     site, pl = state["site"], state["pl"]
-    state["submitted"][site][pl][row_id] = False
+    if not _can_edit(site, state):
+        return dash.no_update, f"⚠ No permission to edit {site}."
+
+    state["submitted"][site][pl][triggered["row"]] = False
     return state, "Row re-opened for editing."
 
 
 # ── Save Friday FRC ───────────────────────────────────────────────────────────
 
 @app.callback(
-    Output("app-state",   "data",    allow_duplicate=True),
-    Output("toast-store", "data",    allow_duplicate=True),
+    Output("app-state",   "data", allow_duplicate=True),
+    Output("toast-store", "data", allow_duplicate=True),
     Input("btn-fri-save",        "n_clicks"),
     Input("btn-fri-save-bottom", "n_clicks"),
     State("app-state", "data"),
@@ -560,22 +631,19 @@ def save_fri(n1, n2, state: dict):
     if not (n1 or n2):
         return dash.no_update, dash.no_update
 
-    state  = deepcopy(state)
     site, pl = state["site"], state["pl"]
-    na_cols  = na_matrix(site, pl).get("fri_frc", [])
-    cols     = COLS_BY_PL[pl]
-    vals     = state["values"][site][pl]["fri_frc"]
-    has_data = any(vals.get(c["id"], "") for c in cols if c["id"] not in na_cols)
+    if not _can_edit(site, state):
+        return dash.no_update, f"⚠ No permission to edit {site}."
 
-    if not has_data:
-        return state, "⚠ Enter at least one value before saving."
+    if not _row_has_data(state, site, pl, "fri_frc"):
+        return dash.no_update, "⚠ Enter at least one value before saving."
 
     values, zero_flags, comments = _db_payload(state, site, pl, "fri_frc")
     try:
-        db.save_draft(CURRENT_WEEK["week_id"], site, pl, USER_ID,
+        db.save_draft(CURRENT_WEEK["week_id"], site, pl, state["user"],
                       "fri_frc", values, zero_flags, comments)
     except Exception as exc:
-        return state, f"⚠ Save failed — {exc}"
+        return dash.no_update, f"⚠ Save failed — {exc}"
 
     state["drafted"][site][pl]["fri_frc"] = True
     return state, "⤓ Friday FRC — draft saved"
@@ -584,8 +652,8 @@ def save_fri(n1, n2, state: dict):
 # ── Submit Friday FRC ─────────────────────────────────────────────────────────
 
 @app.callback(
-    Output("app-state",   "data",    allow_duplicate=True),
-    Output("toast-store", "data",    allow_duplicate=True),
+    Output("app-state",   "data", allow_duplicate=True),
+    Output("toast-store", "data", allow_duplicate=True),
     Input("btn-fri-submit",        "n_clicks"),
     Input("btn-fri-submit-bottom", "n_clicks"),
     State("app-state", "data"),
@@ -595,41 +663,26 @@ def submit_fri(n1, n2, state: dict):
     if not (n1 or n2):
         return dash.no_update, dash.no_update
 
-    state  = deepcopy(state)
     site, pl = state["site"], state["pl"]
-    na_cols  = na_matrix(site, pl).get("fri_frc", [])
-    cols     = COLS_BY_PL[pl]
-    vals     = state["values"][site][pl]["fri_frc"]
-    mon_vals = state["values"][site][pl].get("mon_frc", {})
-    has_data = any(vals.get(c["id"], "") for c in cols if c["id"] not in na_cols)
+    if not _can_edit(site, state):
+        return dash.no_update, f"⚠ No permission to edit {site}."
 
-    if not has_data:
+    na_cols = na_matrix(site, pl).get("fri_frc", [])
+    cols    = COLS_BY_PL[pl]
+
+    if not _row_has_data(state, site, pl, "fri_frc"):
         state["submit_attempted"] = True
         return state, "⚠ Enter at least one value before submitting."
 
-    # Check comment requirements
-    fc = state["fri_comments"][site][pl]
-    below_ids: list[str] = []
-    for col in cols:
-        cid = col["id"]
-        if cid in na_cols:
-            continue
-        try:
-            fri = float(vals.get(cid, "") or 0)
-            mon = float(mon_vals.get(cid, "") or 0)
-        except ValueError:
-            continue
-        if vals.get(cid, "") == "" or mon_vals.get(cid, "") == "":
-            continue
-        diff = mon - fri
-        if diff >= THRESHOLD_ABS or (mon > 0 and diff / mon >= THRESHOLD_REL):
-            below_ids.append(cid)
-
+    # A Friday cell that dropped below threshold vs Monday needs a comment.
+    vals      = state["values"][site][pl]["fri_frc"]
+    mon_vals  = state["values"][site][pl].get("mon_frc", {})
+    fc        = state["fri_comments"][site][pl]
+    below_ids = cols_below_threshold(vals, mon_vals, na_cols, cols)
     missing = [
         cid for cid in below_ids
         if not (fc.get(cid, {}).get("presets") or fc.get(cid, {}).get("others", "").strip())
     ]
-
     if missing:
         state["submit_attempted"] = True
         missing_labels = [c["label"] for c in cols if c["id"] in missing]
@@ -637,15 +690,15 @@ def submit_fri(n1, n2, state: dict):
 
     values, zero_flags, comments = _db_payload(state, site, pl, "fri_frc")
     try:
-        db.submit_row(CURRENT_WEEK["week_id"], site, pl, USER_ID,
+        db.submit_row(CURRENT_WEEK["week_id"], site, pl, state["user"],
                       "fri_frc", values, zero_flags, comments)
-        db.delete_draft(CURRENT_WEEK["week_id"], site, pl, "fri_frc", USER_ID)
+        db.delete_draft(CURRENT_WEEK["week_id"], site, pl, "fri_frc", state["user"])
     except Exception as exc:
-        return state, f"⚠ Submit failed — {exc}"
+        return dash.no_update, f"⚠ Submit failed — {exc}"
 
     state["submitted"][site][pl]["fri_frc"] = True
     state["drafted"][site][pl]["fri_frc"]   = False
-    state["fri_open"]        = False
+    state["fri_open"]         = False
     state["submit_attempted"] = False
     return state, "✓ Friday FRC submitted"
 
@@ -653,8 +706,8 @@ def submit_fri(n1, n2, state: dict):
 # ── Change Friday submission ──────────────────────────────────────────────────
 
 @app.callback(
-    Output("app-state",   "data",    allow_duplicate=True),
-    Output("toast-store", "data",    allow_duplicate=True),
+    Output("app-state",   "data", allow_duplicate=True),
+    Output("toast-store", "data", allow_duplicate=True),
     Input("btn-fri-change", "n_clicks"),
     State("app-state", "data"),
     prevent_initial_call=True,
@@ -662,10 +715,13 @@ def submit_fri(n1, n2, state: dict):
 def change_fri(n, state: dict):
     if not n:
         return dash.no_update, dash.no_update
-    state = deepcopy(state)
+
     site, pl = state["site"], state["pl"]
+    if not _can_edit(site, state):
+        return dash.no_update, f"⚠ No permission to edit {site}."
+
     state["submitted"][site][pl]["fri_frc"] = False
-    state["fri_open"] = True
+    state["fri_open"]         = True
     state["submit_attempted"] = False
     return state, "Friday FRC re-opened for editing."
 
@@ -673,8 +729,8 @@ def change_fri(n, state: dict):
 # ── Save all / Submit all ─────────────────────────────────────────────────────
 
 @app.callback(
-    Output("app-state",   "data",    allow_duplicate=True),
-    Output("toast-store", "data",    allow_duplicate=True),
+    Output("app-state",   "data", allow_duplicate=True),
+    Output("toast-store", "data", allow_duplicate=True),
     Input("btn-save-all",   "n_clicks"),
     Input("btn-submit-all", "n_clicks"),
     State("app-state", "data"),
@@ -685,9 +741,12 @@ def bulk_action(n_save, n_submit, state: dict):
     if not triggered:
         return dash.no_update, dash.no_update
 
-    state  = deepcopy(state)
     site, pl = state["site"], state["pl"]
-    week = CURRENT_WEEK["week_id"]
+    if not _can_edit(site, state):
+        return dash.no_update, f"⚠ No permission to edit {site}."
+
+    week    = CURRENT_WEEK["week_id"]
+    user    = state["user"]
     is_save = triggered == "btn-save-all"
     n, errors = 0, 0
 
@@ -697,23 +756,19 @@ def bulk_action(n_save, n_submit, state: dict):
             continue
         if state["submitted"][site][pl][rid]:
             continue
-        na_cols  = na_matrix(site, pl).get(rid, [])
-        cols     = COLS_BY_PL[pl]
-        vals     = state["values"][site][pl][rid]
-        has_data = any(vals.get(c["id"], "") for c in cols if c["id"] not in na_cols)
-        if not has_data:
+        if not _row_has_data(state, site, pl, rid):
             continue
 
         values, zero_flags, comments = _db_payload(state, site, pl, rid)
         try:
             if is_save:
-                db.save_draft(week, site, pl, USER_ID, rid,
+                db.save_draft(week, site, pl, user, rid,
                               values, zero_flags, comments)
                 state["drafted"][site][pl][rid] = True
             else:
-                db.submit_row(week, site, pl, USER_ID, rid,
+                db.submit_row(week, site, pl, user, rid,
                               values, zero_flags, comments)
-                db.delete_draft(week, site, pl, rid, USER_ID)
+                db.delete_draft(week, site, pl, rid, user)
                 state["submitted"][site][pl][rid] = True
                 state["drafted"][site][pl][rid]   = False
             n += 1
