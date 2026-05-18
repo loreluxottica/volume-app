@@ -932,6 +932,37 @@ app.clientside_callback(
 )
 
 
+# ── Friday FRC comment visibility (clientside) ────────────────────────────────
+# Runs entirely in-browser on every fri-input keystroke — no server round-trip.
+# Shows/hides each comment section immediately as the user types.
+
+app.clientside_callback(
+    """
+    function(fri_values, ids, app_state) {
+        if (!app_state) return window.dash_clientside.no_update;
+        var site = app_state.site, pl = app_state.pl;
+        var sliceVals = ((app_state.values || {})[site] || {})[pl] || {};
+        var mon_frc = sliceVals['mon_frc'] || {};
+        var THRESHOLD_ABS = 10, THRESHOLD_REL = 0.10;
+        return ids.map(function(id_obj, i) {
+            var cid = id_obj.col;
+            var fri = parseFloat(fri_values[i]);
+            var mon = parseFloat(mon_frc[cid]);
+            if (isNaN(fri) || isNaN(mon) || mon <= 0) return {"display": "none"};
+            var diff = mon - fri;
+            var below = diff >= THRESHOLD_ABS || diff / mon >= THRESHOLD_REL;
+            return below ? {} : {"display": "none"};
+        });
+    }
+    """,
+    Output({"type": "fri-comment-section", "col": ALL}, "style"),
+    Input({"type": "fri-input", "col": ALL}, "value"),
+    Input({"type": "fri-input", "col": ALL}, "id"),
+    State("app-state", "data"),
+    prevent_initial_call=True,
+)
+
+
 # ── Run ───────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":

@@ -140,7 +140,7 @@ def render_friday_panel(
                 value=fri_values.get(cid) or None,
                 disabled=zf,
                 className=input_cls,
-                debounce=False,
+                debounce=True,
             ),
             # Zero flag checkbox
             html.Div(className="zero-flag-row", children=[
@@ -153,31 +153,35 @@ def render_friday_panel(
             ]),
         ]
 
-        # Comment section (only when below threshold)
-        if is_below:
-            lbl_cls = "comment-label"
-            if comment_missing:
-                lbl_cls += " comment-label-error"
-            comment_children = [
-                html.Div(
-                    "⚠ Comment required" if comment_missing else "Reason for variance",
-                    className=lbl_cls,
-                ),
-                dcc.Checklist(
-                    id={"type": "fri-presets", "col": cid},
-                    options=[{"label": p["label"], "value": p["id"]} for p in COMMENT_PRESETS],
-                    value=fc.get("presets", []),
-                    className="preset-checklist",
-                ),
-                dcc.Textarea(
-                    id={"type": "fri-others", "col": cid},
-                    placeholder="Others (optional)…",
-                    value=fc.get("others", ""),
-                    className="others-input",
-                    debounce=True,
-                ),
-            ]
-            card_children.append(html.Div(className="comment-section", children=comment_children))
+        # Comment section — always rendered; shown/hidden by clientside callback
+        lbl_cls = "comment-label"
+        if comment_missing:
+            lbl_cls += " comment-label-error"
+        comment_children = [
+            html.Div(
+                "⚠ Comment required" if comment_missing else "Reason for variance",
+                className=lbl_cls,
+            ),
+            dcc.Checklist(
+                id={"type": "fri-presets", "col": cid},
+                options=[{"label": p["label"], "value": p["id"]} for p in COMMENT_PRESETS],
+                value=fc.get("presets", []),
+                className="preset-checklist",
+            ),
+            dcc.Textarea(
+                id={"type": "fri-others", "col": cid},
+                placeholder="Others (optional)…",
+                value=fc.get("others", ""),
+                className="others-input",
+                debounce=True,
+            ),
+        ]
+        card_children.append(html.Div(
+            id={"type": "fri-comment-section", "col": cid},
+            className="comment-section",
+            children=comment_children,
+            style={} if is_below else {"display": "none"},
+        ))
 
         cards.append(html.Div(className=card_cls, children=[c for c in card_children if c is not None]))
 
