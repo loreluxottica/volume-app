@@ -23,7 +23,8 @@ from components.header import render_topbar, render_app_header
 from components.data_table import render_data_table
 from data import cache, db
 from data.schema import (
-    ROWS, COLS_BY_PL, na_matrix, SITES, cols_below_threshold,
+    ROWS, COLS_BY_PL, na_matrix, SITES,
+    cols_below_threshold, wip_ot_below_threshold,
 )
 
 # ── App init ──────────────────────────────────────────────────────────────────
@@ -181,6 +182,13 @@ def _load_slice(state: dict, site: str, pl: str) -> bool:
             state["zero_flags"][site][pl][rid][cid] = True
         if rid == "fri_frc":
             _apply_comment(state["fri_comments"][site][pl], cid, r)
+        elif rid == "wip_ot":
+            other = _cell_str(r.get("comment_other"))
+            if other and cid in state["wip_ot_comments"][site][pl]:
+                state["wip_ot_comments"][site][pl][cid]["others"] = other
+            preset = _cell_str(r.get("comment_preset"))
+            if preset and cid in state["wip_ot_comments"][site][pl]:
+                state["wip_ot_comments"][site][pl][cid]["presets"] = [p for p in preset.split(",") if p]
 
     # Drafts are loaded for sites the user can edit.
     if _can_edit(site, state):
@@ -202,6 +210,13 @@ def _load_slice(state: dict, site: str, pl: str) -> bool:
                     state["zero_flags"][site][pl][rid][cid] = True
                 if rid == "fri_frc":
                     _apply_comment(state["fri_comments"][site][pl], cid, r)
+                elif rid == "wip_ot":
+                    other = _cell_str(r.get("comment_other"))
+                    if other and cid in state["wip_ot_comments"][site][pl]:
+                        state["wip_ot_comments"][site][pl][cid]["others"] = other
+                    preset = _cell_str(r.get("comment_preset"))
+                    if preset and cid in state["wip_ot_comments"][site][pl]:
+                        state["wip_ot_comments"][site][pl][cid]["presets"] = [p for p in preset.split(",") if p]
 
     state["loaded"].append(key)
     return True
@@ -276,6 +291,13 @@ def _db_payload(state: dict, site: str, pl: str, row_id: str):
                 "presets": fc.get("presets", []),
                 "others":  fc.get("others", ""),
             }
+    elif row_id == "wip_ot":
+        for cid in values:
+            fc = state.get("wip_ot_comments", {}).get(site, {}).get(pl, {}).get(cid, {})
+            comments[cid] = {
+                "presets": fc.get("presets", []),
+                "others":  fc.get("others", ""),
+            }
     return values, zero_flags, comments
 
 
@@ -302,20 +324,26 @@ def _empty_state() -> dict:
         "global":         {"FRAMES": {}, "WEARABLES": {}},  # summed GLOBAL view
         "global_loaded":  [],   # ["FRAMES"/"WEARABLES"] product lines summed
         "loaded":         [],   # ["site|pl", ...] slices fetched from the DB
+        "wip_ot_comments": {},  # {site: {pl: {col_id: {"presets":[], "others":""}}}}
+        "wip_ot_open":    {},   # {site: {pl: bool}}
     }
     for s in SITES:
-        state["values"][s]       = {}
-        state["submitted"][s]    = {}
-        state["drafted"][s]      = {}
-        state["zero_flags"][s]   = {}
-        state["fri_comments"][s] = {}
+        state["values"][s]           = {}
+        state["submitted"][s]        = {}
+        state["drafted"][s]          = {}
+        state["zero_flags"][s]       = {}
+        state["fri_comments"][s]     = {}
+        state["wip_ot_comments"][s]  = {}
+        state["wip_ot_open"][s]      = {}
         for pl in ["FRAMES", "WEARABLES"]:
             cols = COLS_BY_PL[pl]
-            state["values"][s][pl]       = {r["id"]: {c["id"]: "" for c in cols} for r in ROWS}
-            state["submitted"][s][pl]    = {r["id"]: False for r in ROWS}
-            state["drafted"][s][pl]      = {r["id"]: False for r in ROWS}
-            state["zero_flags"][s][pl]   = {r["id"]: {c["id"]: False for c in cols} for r in ROWS}
-            state["fri_comments"][s][pl] = {c["id"]: {"presets": [], "others": ""} for c in cols}
+            state["values"][s][pl]          = {r["id"]: {c["id"]: "" for c in cols} for r in ROWS}
+            state["submitted"][s][pl]       = {r["id"]: False for r in ROWS}
+            state["drafted"][s][pl]         = {r["id"]: False for r in ROWS}
+            state["zero_flags"][s][pl]      = {r["id"]: {c["id"]: False for c in cols} for r in ROWS}
+            state["fri_comments"][s][pl]    = {c["id"]: {"presets": [], "others": ""} for c in cols}
+            state["wip_ot_comments"][s][pl] = {c["id"]: {"presets": [], "others": ""} for c in cols}
+            state["wip_ot_open"][s][pl]     = False
 
     return state
 
@@ -402,13 +430,15 @@ def render_ui(state: dict):
         values    = state["global"].get(pl, {})
         submitted = {r["id"]: False for r in ROWS}
         drafted   = {r["id"]: False for r in ROWS}
-        zf, fc    = {}, {}
+        zf, fc, woc, woo = {}, {}, {}, False
     else:
         submitted = state["submitted"][site][pl]
         drafted   = state["drafted"][site][pl]
         values    = state["values"][site][pl]
         zf        = state["zero_flags"][site][pl]
         fc        = state["fri_comments"][site][pl]
+        woc       = state.get("wip_ot_comments", {}).get(site, {}).get(pl, {})
+        woo       = state.get("wip_ot_open", {}).get(site, {}).get(pl, False)
 
     header = render_app_header(
         current_site=site, current_pl=pl,
@@ -422,6 +452,7 @@ def render_ui(state: dict):
         zero_flags=zf, fri_comments=fc,
         fri_open=fri_open, submit_attempted=sa,
         is_readonly=is_ro,
+        wip_ot_comments=woc, wip_ot_open=woo,
     )
     return topbar, header, body
 
@@ -493,14 +524,17 @@ def update_row_values(values, state: dict):
 
 @app.callback(
     Output("app-state", "data", allow_duplicate=True),
-    Input({"type": "fri-input",   "col": ALL}, "value"),
-    Input({"type": "fri-zero",    "col": ALL}, "value"),
-    Input({"type": "fri-presets", "col": ALL}, "value"),
-    Input({"type": "fri-others",  "col": ALL}, "value"),
+    Input({"type": "fri-input",      "col": ALL}, "value"),
+    Input({"type": "fri-zero",       "col": ALL}, "value"),
+    Input({"type": "fri-presets",    "col": ALL}, "value"),
+    Input({"type": "fri-others",     "col": ALL}, "value"),
+    Input({"type": "wip-ot-presets", "col": ALL}, "value"),
+    Input({"type": "wip-ot-others",  "col": ALL}, "value"),
     State("app-state", "data"),
     prevent_initial_call=True,
 )
-def update_fri_values(fri_vals, fri_zeros, fri_presets, fri_others, state: dict):
+def update_fri_values(fri_vals, fri_zeros, fri_presets, fri_others,
+                      wip_presets, wip_others, state: dict):
     if not ctx.triggered or not _can_edit(state["site"], state):
         return dash.no_update
     site, pl = state["site"], state["pl"]
@@ -522,6 +556,10 @@ def update_fri_values(fri_vals, fri_zeros, fri_presets, fri_others, state: dict)
             state["fri_comments"][site][pl][col_id]["presets"] = val or []
         elif t == "fri-others":
             state["fri_comments"][site][pl][col_id]["others"] = val or ""
+        elif t == "wip-ot-presets":
+            state["wip_ot_comments"][site][pl][col_id]["presets"] = val or []
+        elif t == "wip-ot-others":
+            state["wip_ot_comments"][site][pl][col_id]["others"] = val or ""
 
     return state
 
@@ -538,6 +576,23 @@ def toggle_fri_panel(n, state: dict):
     if not n:
         return dash.no_update
     state["fri_open"] = not state["fri_open"]
+    return state
+
+
+# ── WIP OT panel toggle ───────────────────────────────────────────────────────
+
+@app.callback(
+    Output("app-state", "data", allow_duplicate=True),
+    Input("btn-wip-ot-toggle", "n_clicks"),
+    State("app-state", "data"),
+    prevent_initial_call=True,
+)
+def toggle_wip_ot_panel(n, state: dict):
+    if not n:
+        return dash.no_update
+    site, pl = state["site"], state["pl"]
+    current = state.get("wip_ot_open", {}).get(site, {}).get(pl, False)
+    state["wip_ot_open"][site][pl] = not current
     return state
 
 
@@ -598,6 +653,24 @@ def submit_row(n_clicks_list, state: dict):
     row_id = triggered["row"]
     if not _row_has_data(state, site, pl, row_id):
         return dash.no_update, "⚠ Enter at least one value before submitting."
+
+    # WIP OT: block submit if any column ≤ 90% and comment missing
+    if row_id == "wip_ot":
+        na_cols_wip = na_matrix(site, pl).get("wip_ot", [])
+        below = wip_ot_below_threshold(state["values"][site][pl]["wip_ot"],
+                                       na_cols_wip, COLS_BY_PL[pl])
+        if below:
+            woc = state.get("wip_ot_comments", {}).get(site, {}).get(pl, {})
+            missing_cmt = [
+                cid for cid in below
+                if not (woc.get(cid, {}).get("presets") or
+                        woc.get(cid, {}).get("others", "").strip())
+            ]
+            if missing_cmt:
+                state["submit_attempted"] = True
+                state["wip_ot_open"][site][pl] = True
+                missing_labels = [c["label"] for c in COLS_BY_PL[pl] if c["id"] in missing_cmt]
+                return state, f"⚠ Comment required (WIP OT ≤ 90%): {', '.join(missing_labels)}"
 
     row_label = next(r["label"] for r in ROWS if r["id"] == row_id)
     values, zero_flags, comments = _db_payload(state, site, pl, row_id)
@@ -784,6 +857,24 @@ def bulk_action(n_save, n_submit, state: dict):
             continue
         if not _row_has_data(state, site, pl, rid):
             continue
+
+        # WIP OT: skip submit (not save) if comment missing for below-threshold cols
+        if rid == "wip_ot" and not is_save:
+            na_cols_wip = na_matrix(site, pl).get("wip_ot", [])
+            below = wip_ot_below_threshold(state["values"][site][pl]["wip_ot"],
+                                           na_cols_wip, COLS_BY_PL[pl])
+            if below:
+                woc = state.get("wip_ot_comments", {}).get(site, {}).get(pl, {})
+                missing_cmt = [
+                    cid for cid in below
+                    if not (woc.get(cid, {}).get("presets") or
+                            woc.get(cid, {}).get("others", "").strip())
+                ]
+                if missing_cmt:
+                    state["wip_ot_open"][site][pl] = True
+                    errors += 1
+                    print(f"[warn] bulk submit wip_ot: comment required for {missing_cmt}")
+                    continue
 
         values, zero_flags, comments = _db_payload(state, site, pl, rid)
         try:
