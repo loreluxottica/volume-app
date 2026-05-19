@@ -157,14 +157,17 @@ CREATE TABLE `sbx-logistics`.`volume-data-entry-app`.weeks (
   week_id INT, year INT, created_at TIMESTAMP, is_open BOOLEAN
 );
 
--- `sbx-logistics`.`volume-data-entry-app`.submissions (append-only — mai UPDATE/DELETE)
+-- `sbx-logistics`.`volume-data-entry-app`.submissions
+-- (le righe si aggiungono soltanto; submit_row marca official_log=FALSE su
+--  quelle superate, mai DELETE)
 CREATE TABLE `sbx-logistics`.`volume-data-entry-app`.submissions (
   submission_id STRING, timestamp TIMESTAMP, week_id INT, site STRING,
   product_line STRING, user_id STRING, submission_type STRING, channel STRING,
   value_kpcs DOUBLE, is_zero_flagged BOOLEAN, official_log BOOLEAN,
   comment_preset STRING, comment_other STRING, is_amendment BOOLEAN,
   ref_submission_id STRING
-);
+)
+CLUSTER BY (week_id, site, product_line);
 
 -- `sbx-logistics`.`volume-data-entry-app`.drafts (sovrascritta a ogni Save — NON append-only)
 CREATE TABLE `sbx-logistics`.`volume-data-entry-app`.drafts (
@@ -172,7 +175,8 @@ CREATE TABLE `sbx-logistics`.`volume-data-entry-app`.drafts (
   product_line STRING, user_id STRING, submission_type STRING, channel STRING,
   value_kpcs DOUBLE, is_zero_flagged BOOLEAN, comment_preset STRING,
   comment_other STRING
-);
+)
+CLUSTER BY (week_id, site, product_line, user_id);
 
 -- `sbx-logistics`.`volume-data-entry-app`.app_access (accesso per-utente ai siti)
 CREATE TABLE `sbx-logistics`.`volume-data-entry-app`.app_access (
@@ -180,9 +184,12 @@ CREATE TABLE `sbx-logistics`.`volume-data-entry-app`.app_access (
 );
 ```
 
-> `submissions` è append-only: `db.get_latest_submissions` e `get_gli_extract`
-> prendono l'ultima riga per chiave con una window function sul `timestamp` —
-> niente view, niente flip di `official_log`.
+> `submissions` non viene mai cancellata: `submit_row` inserisce le nuove righe
+> e poi marca `official_log = FALSE` su quelle precedenti. `get_latest_submissions`
+> e `get_gli_extract` leggono la riga autorevole con `WHERE official_log = TRUE`
+> (niente view). Le tabelle sono clusterizzate per `week_id` — vedi
+> `scripts/optimize_tables.sql` per il clustering e l'`OPTIMIZE`/`VACUUM`
+> schedulato (BBP v0.7 item #11).
 
 ## Gestione accessi
 
