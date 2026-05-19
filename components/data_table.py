@@ -305,7 +305,8 @@ def render_standard_row(
     is_drafted: bool,
     deadline: str,
     is_readonly: bool,
-    wip_ot_open: bool | None = None,  # None = no below-threshold cols; bool = panel state
+    wip_ot_open: bool | None = None,  # None = not the WIP OT row; bool = panel open state
+    wip_ot_has_below: bool = False,   # WIP OT row only: any column ≤ 90%?
 ) -> html.Tr:
     is_ref    = row["is_ref"]
     is_locked = is_ref and not is_submitted
@@ -380,7 +381,23 @@ def render_standard_row(
             disabled=True,
         )
     elif row_id == "wip_ot" and wip_ot_open is not None:
-        btn_cls = "action-btn btn-fri" + (" btn-fri-open" if wip_ot_open else "")
+        # The comments toggle is always present (like the Friday FRC panel
+        # button). It only becomes actionable when a column is ≤ 90%.
+        if wip_ot_has_below:
+            toggle_btn = html.Button(
+                ["▲ Close comments" if wip_ot_open else "▼ Comments required"],
+                id="btn-wip-ot-toggle",
+                className="action-btn btn-fri" + (" btn-fri-open" if wip_ot_open else ""),
+                n_clicks=0,
+            )
+        else:
+            toggle_btn = html.Button(
+                ["Comments"],
+                id="btn-wip-ot-toggle",
+                className="action-btn btn-locked",
+                disabled=True,
+                n_clicks=0,
+            )
         action = html.Div(className="action-split", children=[
             html.Button(
                 ["⤓ ", "Saved" if is_drafted else "Save"],
@@ -388,12 +405,7 @@ def render_standard_row(
                 className=f"action-btn {'btn-draft' if is_drafted else 'btn-save'}",
                 n_clicks=0,
             ),
-            html.Button(
-                ["▲ Close comments" if wip_ot_open else "▼ Comments required"],
-                id="btn-wip-ot-toggle",
-                className=btn_cls,
-                n_clicks=0,
-            ),
+            toggle_btn,
             html.Button(
                 ["↑ ", "Submit"],
                 id={"type": "btn-submit", "row": row_id},
@@ -521,7 +533,9 @@ def render_data_table(
     # Pre-compute WIP OT below-threshold columns once for the whole table
     wip_ot_na = na_map.get("wip_ot", [])
     wip_ot_below = wip_ot_below_threshold(form_values.get("wip_ot", {}), wip_ot_na, cols)
-    wip_ot_open_arg = wip_ot_open if (wip_ot_below and not submitted.get("wip_ot") and not is_readonly) else None
+    wip_ot_has_below = bool(wip_ot_below)
+    # The comments panel only opens when at least one column is ≤ 90%.
+    wip_ot_panel_open = wip_ot_open and wip_ot_has_below
 
     thead_rows = render_table_header(cols, current_site, current_pl)
 
@@ -563,10 +577,11 @@ def render_data_table(
                 is_drafted=drafted.get(rid, False),
                 deadline=dl.get(rid, ""),
                 is_readonly=is_readonly,
-                wip_ot_open=wip_ot_open_arg if rid == "wip_ot" else None,
+                wip_ot_open=wip_ot_panel_open if rid == "wip_ot" else None,
+                wip_ot_has_below=wip_ot_has_below if rid == "wip_ot" else False,
             ))
             # WIP OT comment panel (expanded below the row)
-            if rid == "wip_ot" and wip_ot_open_arg is True:
+            if rid == "wip_ot" and wip_ot_panel_open:
                 tbody_rows.append(html.Tr(html.Td(
                     colSpan=len(cols) + 2,
                     children=render_wip_ot_panel(
