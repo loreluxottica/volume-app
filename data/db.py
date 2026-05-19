@@ -404,7 +404,7 @@ def get_gli_extract(week_id: int) -> pd.DataFrame:
         f"""
         SELECT week_id, site, product_line, submission_type,
                channel, value_kpcs, is_zero_flagged,
-               comment_preset, comment_other
+               comment_preset, comment_other, timestamp, user_id
         FROM (
             SELECT *, ROW_NUMBER() OVER (
                 PARTITION BY site, product_line, submission_type, channel

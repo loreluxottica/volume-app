@@ -196,6 +196,8 @@ def _load_slice(state: dict, site: str, pl: str) -> bool:
                 state["wip_ot_comments"][site][pl][cid]["presets"] = [p for p in preset.split(",") if p]
         elif rid == "actual":
             _apply_comment(state["actual_comments"][site][pl], cid, r)
+        elif rid == "thu_frc":
+            _apply_comment(state["thu_comments"][site][pl], cid, r)
 
     # Drafts are loaded for sites the user can edit.
     if _can_edit(site, state):
@@ -226,6 +228,8 @@ def _load_slice(state: dict, site: str, pl: str) -> bool:
                         state["wip_ot_comments"][site][pl][cid]["presets"] = [p for p in preset.split(",") if p]
                 elif rid == "actual":
                     _apply_comment(state["actual_comments"][site][pl], cid, r)
+                elif rid == "thu_frc":
+                    _apply_comment(state["thu_comments"][site][pl], cid, r)
 
     state["loaded"].append(key)
     return True
@@ -314,6 +318,13 @@ def _db_payload(state: dict, site: str, pl: str, row_id: str):
                 "presets": fc.get("presets", []),
                 "others":  fc.get("others", ""),
             }
+    elif row_id == "thu_frc":
+        for cid in values:
+            fc = state.get("thu_comments", {}).get(site, {}).get(pl, {}).get(cid, {})
+            comments[cid] = {
+                "presets": fc.get("presets", []),
+                "others":  fc.get("others", ""),
+            }
     return values, zero_flags, comments
 
 
@@ -344,6 +355,8 @@ def _empty_state() -> dict:
         "wip_ot_open":    {},   # {site: {pl: bool}}
         "actual_comments": {},  # {site: {pl: {col_id: {"presets":[], "others":""}}}}
         "actual_open":    {},   # {site: {pl: bool}}
+        "thu_comments":   {},   # {site: {pl: {col_id: {"presets":[], "others":""}}}}
+        "thu_open":       {},   # {site: {pl: bool}}
     }
     for s in SITES:
         state["values"][s]           = {}
@@ -355,6 +368,8 @@ def _empty_state() -> dict:
         state["wip_ot_open"][s]      = {}
         state["actual_comments"][s]  = {}
         state["actual_open"][s]      = {}
+        state["thu_comments"][s]     = {}
+        state["thu_open"][s]         = {}
         for pl in ["FRAMES", "WEARABLES"]:
             cols = COLS_BY_PL[pl]
             state["values"][s][pl]          = {r["id"]: {c["id"]: "" for c in cols} for r in ROWS}
@@ -366,6 +381,8 @@ def _empty_state() -> dict:
             state["wip_ot_open"][s][pl]     = False
             state["actual_comments"][s][pl] = {c["id"]: {"presets": [], "others": ""} for c in cols}
             state["actual_open"][s][pl]     = False
+            state["thu_comments"][s][pl]    = {c["id"]: {"presets": [], "others": ""} for c in cols}
+            state["thu_open"][s][pl]        = False
 
     return state
 
@@ -378,7 +395,7 @@ def _empty_state() -> dict:
 # Callbacks merge the two into one dict, run the existing logic, then split the
 # result back — so the DB/state helpers stay unchanged.
 
-_FORM_KEYS = ("values", "fri_comments", "wip_ot_comments", "actual_comments")
+_FORM_KEYS = ("values", "fri_comments", "wip_ot_comments", "actual_comments", "thu_comments")
 
 
 def _form_part(s: dict) -> dict:
@@ -414,6 +431,9 @@ app.layout = html.Div([
 
     # Toast notification (injected via clientside callback)
     html.Div(id="toast-container", className="toast-container"),
+
+    # CSV export sink
+    dcc.Download(id="csv-download"),
 ])
 
 
@@ -484,6 +504,7 @@ def render_ui(app_data: dict, form_data: dict):
         drafted   = {r["id"]: False for r in ROWS}
         zf, fc, woc, woo = {}, {}, {}, False
         ac, ao    = {}, False
+        thc, tho  = {}, False
     else:
         submitted = state["submitted"][site][pl]
         drafted   = state["drafted"][site][pl]
@@ -494,6 +515,8 @@ def render_ui(app_data: dict, form_data: dict):
         woo       = state.get("wip_ot_open", {}).get(site, {}).get(pl, False)
         ac        = state.get("actual_comments", {}).get(site, {}).get(pl, {})
         ao        = state.get("actual_open", {}).get(site, {}).get(pl, False)
+        thc       = state.get("thu_comments", {}).get(site, {}).get(pl, {})
+        tho       = state.get("thu_open", {}).get(site, {}).get(pl, False)
 
     header = render_app_header(
         current_site=site, current_pl=pl,
@@ -509,6 +532,7 @@ def render_ui(app_data: dict, form_data: dict):
         is_readonly=is_ro,
         wip_ot_comments=woc, wip_ot_open=woo,
         actual_comments=ac, actual_open=ao,
+        thu_comments=thc, thu_open=tho,
     )
     return topbar, header, body
 
@@ -605,6 +629,9 @@ def update_row_values(values, app_data: dict, form_data: dict):
     Input({"type": "actual-input",   "col": ALL}, "value"),
     Input({"type": "actual-presets", "col": ALL}, "value"),
     Input({"type": "actual-others",  "col": ALL}, "value"),
+    Input({"type": "thu-input",      "col": ALL}, "value"),
+    Input({"type": "thu-presets",    "col": ALL}, "value"),
+    Input({"type": "thu-others",     "col": ALL}, "value"),
     State("app-state", "data"),
     State("form-values", "data"),
     prevent_initial_call=True,
@@ -612,6 +639,7 @@ def update_row_values(values, app_data: dict, form_data: dict):
 def update_fri_values(fri_vals, fri_presets, fri_others,
                       wip_inputs, wip_presets, wip_others,
                       act_inputs, act_presets, act_others,
+                      thu_inputs, thu_presets, thu_others,
                       app_data: dict, form_data: dict):
     state = _merge(app_data, form_data)
     if not ctx.triggered or not _can_edit(state["site"], state):
@@ -642,6 +670,12 @@ def update_fri_values(fri_vals, fri_presets, fri_others,
             state["actual_comments"][site][pl][col_id]["presets"] = val or []
         elif t == "actual-others":
             state["actual_comments"][site][pl][col_id]["others"] = val or ""
+        elif t == "thu-input":
+            state["values"][site][pl]["thu_frc"][col_id] = str(val) if val is not None else ""
+        elif t == "thu-presets":
+            state["thu_comments"][site][pl][col_id]["presets"] = val or []
+        elif t == "thu-others":
+            state["thu_comments"][site][pl][col_id]["others"] = val or ""
 
     return _form_part(state)
 
@@ -752,6 +786,40 @@ def update_actual_zero(actual_zeros, app_data: dict, form_data: dict):
     return _app_part(state), _form_part(state)
 
 
+# ── Thursday FRC zero-flag callback ───────────────────────────────────────────
+
+@app.callback(
+    Output("app-state",   "data", allow_duplicate=True),
+    Output("form-values", "data", allow_duplicate=True),
+    Input({"type": "thu-zero", "col": ALL}, "value"),
+    State("app-state", "data"),
+    State("form-values", "data"),
+    prevent_initial_call=True,
+)
+def update_thu_zero(thu_zeros, app_data: dict, form_data: dict):
+    state = _merge(app_data, form_data)
+    if not ctx.triggered or not _can_edit(state["site"], state):
+        return dash.no_update, dash.no_update
+    site, pl = state["site"], state["pl"]
+    changed = False
+
+    for trigger in ctx.triggered:
+        id_dict = json.loads(trigger["prop_id"].split(".")[0])
+        if id_dict["type"] != "thu-zero":
+            continue
+        col_id  = id_dict["col"]
+        is_zero = bool(trigger["value"])
+        if state["zero_flags"][site][pl]["thu_frc"].get(col_id, False) != is_zero:
+            state["zero_flags"][site][pl]["thu_frc"][col_id] = is_zero
+            if is_zero:
+                state["values"][site][pl]["thu_frc"][col_id] = "0"
+            changed = True
+
+    if not changed:
+        return dash.no_update, dash.no_update
+    return _app_part(state), _form_part(state)
+
+
 # ── Friday panel toggle ───────────────────────────────────────────────────────
 
 @app.callback(
@@ -798,6 +866,23 @@ def toggle_actual_panel(n, state: dict):
     site, pl = state["site"], state["pl"]
     current = state.get("actual_open", {}).get(site, {}).get(pl, False)
     state["actual_open"][site][pl] = not current
+    return state
+
+
+# ── Thursday FRC panel toggle ─────────────────────────────────────────────────
+
+@app.callback(
+    Output("app-state", "data", allow_duplicate=True),
+    Input("btn-thu-toggle", "n_clicks"),
+    State("app-state", "data"),
+    prevent_initial_call=True,
+)
+def toggle_thu_panel(n, state: dict):
+    if not n:
+        return dash.no_update
+    site, pl = state["site"], state["pl"]
+    current = state.get("thu_open", {}).get(site, {}).get(pl, False)
+    state["thu_open"][site][pl] = not current
     return state
 
 
@@ -862,6 +947,16 @@ def submit_row(n_clicks_list, app_data: dict, form_data: dict):
     row_id = triggered["row"]
     if not _row_has_data(state, site, pl, row_id):
         return dash.no_update, "⚠ Enter at least one value before submitting."
+
+    # Every applicable cell must have a value or be zero-flagged (BBP §6.4).
+    na_cols = na_matrix(site, pl).get(row_id, [])
+    cols    = COLS_BY_PL[pl]
+    blank = incomplete_cells(state["values"][site][pl][row_id],
+                             state["zero_flags"][site][pl][row_id], na_cols, cols)
+    if blank:
+        state["submit_attempted"] = True
+        blank_labels = [c["label"] for c in cols if c["id"] in blank]
+        return _app_part(state), f"⚠ Fill or confirm zero for all cells: {', '.join(blank_labels)}"
 
     row_label = next(r["label"] for r in ROWS if r["id"] == row_id)
     values, zero_flags, comments = _db_payload(state, site, pl, row_id)
@@ -1279,6 +1374,199 @@ def change_actual(n, state: dict):
     return state, "Actual re-opened for editing."
 
 
+# ── Save Thursday FRC ─────────────────────────────────────────────────────────
+
+@app.callback(
+    Output("app-state",   "data", allow_duplicate=True),
+    Output("toast-store", "data", allow_duplicate=True),
+    Input("btn-thu-save",        "n_clicks"),
+    Input("btn-thu-save-bottom", "n_clicks"),
+    State("app-state", "data"),
+    State("form-values", "data"),
+    prevent_initial_call=True,
+)
+def save_thu(n1, n2, app_data: dict, form_data: dict):
+    state = _merge(app_data, form_data)
+    if not (n1 or n2):
+        return dash.no_update, dash.no_update
+
+    site, pl = state["site"], state["pl"]
+    if not _can_edit(site, state):
+        return dash.no_update, f"⚠ No permission to edit {site}."
+
+    if not _row_has_data(state, site, pl, "thu_frc"):
+        return dash.no_update, "⚠ Enter at least one value before saving."
+
+    values, zero_flags, comments = _db_payload(state, site, pl, "thu_frc")
+    week = current_week()["week_id"]
+    try:
+        db.save_draft(week, site, pl, state["user"],
+                      "thu_frc", values, zero_flags, comments)
+        cache.invalidate_drafts(week, site, pl, state["user"])
+    except Exception as exc:
+        return dash.no_update, f"⚠ Save failed — {exc}"
+
+    state["drafted"][site][pl]["thu_frc"] = True
+    return _app_part(state), "⤓ Thursday FRC — draft saved"
+
+
+# ── Submit Thursday FRC ───────────────────────────────────────────────────────
+
+@app.callback(
+    Output("app-state",   "data", allow_duplicate=True),
+    Output("toast-store", "data", allow_duplicate=True),
+    Input("btn-thu-submit",        "n_clicks"),
+    Input("btn-thu-submit-bottom", "n_clicks"),
+    State("app-state", "data"),
+    State("form-values", "data"),
+    prevent_initial_call=True,
+)
+def submit_thu(n1, n2, app_data: dict, form_data: dict):
+    state = _merge(app_data, form_data)
+    if not (n1 or n2):
+        return dash.no_update, dash.no_update
+
+    site, pl = state["site"], state["pl"]
+    if not _can_edit(site, state):
+        return dash.no_update, f"⚠ No permission to edit {site}."
+
+    na_cols = na_matrix(site, pl).get("thu_frc", [])
+    cols    = COLS_BY_PL[pl]
+
+    if not _row_has_data(state, site, pl, "thu_frc"):
+        state["submit_attempted"] = True
+        return _app_part(state), "⚠ Enter at least one value before submitting."
+
+    vals      = state["values"][site][pl]["thu_frc"]
+    mon_vals  = state["values"][site][pl].get("mon_frc", {})
+    tc        = state["thu_comments"][site][pl]
+
+    # Every applicable cell must have a value or be zero-flagged (BBP §6.4).
+    blank = incomplete_cells(vals, state["zero_flags"][site][pl]["thu_frc"], na_cols, cols)
+    if blank:
+        state["submit_attempted"] = True
+        blank_labels = [c["label"] for c in cols if c["id"] in blank]
+        return _app_part(state), f"⚠ Fill or confirm zero for all cells: {', '.join(blank_labels)}"
+
+    # A Thursday cell that dropped below threshold vs Monday needs a comment.
+    below_ids = cols_below_threshold(vals, mon_vals, na_cols, cols)
+    missing = [
+        cid for cid in below_ids
+        if not (tc.get(cid, {}).get("presets") or tc.get(cid, {}).get("others", "").strip())
+    ]
+    if missing:
+        state["submit_attempted"] = True
+        missing_labels = [c["label"] for c in cols if c["id"] in missing]
+        return _app_part(state), f"⚠ Comment required: {', '.join(missing_labels)}"
+
+    values, zero_flags, comments = _db_payload(state, site, pl, "thu_frc")
+    week = current_week()["week_id"]
+    try:
+        db.submit_row(week, site, pl, state["user"],
+                      "thu_frc", values, zero_flags, comments)
+        db.delete_draft(week, site, pl, "thu_frc", state["user"])
+        cache.invalidate_submissions(week, site, pl)
+        cache.invalidate_drafts(week, site, pl, state["user"])
+    except Exception as exc:
+        return dash.no_update, f"⚠ Submit failed — {exc}"
+
+    state["submitted"][site][pl]["thu_frc"] = True
+    state["drafted"][site][pl]["thu_frc"]   = False
+    state["thu_open"][site][pl]             = False
+    state["submit_attempted"]               = False
+    return _app_part(state), "✓ Thursday FRC submitted"
+
+
+# ── Change Thursday FRC submission ────────────────────────────────────────────
+
+@app.callback(
+    Output("app-state",   "data", allow_duplicate=True),
+    Output("toast-store", "data", allow_duplicate=True),
+    Input("btn-thu-change", "n_clicks"),
+    State("app-state", "data"),
+    prevent_initial_call=True,
+)
+def change_thu(n, state: dict):
+    if not n:
+        return dash.no_update, dash.no_update
+
+    site, pl = state["site"], state["pl"]
+    if not _can_edit(site, state):
+        return dash.no_update, f"⚠ No permission to edit {site}."
+
+    state["submitted"][site][pl]["thu_frc"] = False
+    state["thu_open"][site][pl]             = True
+    state["submit_attempted"]               = False
+    return state, "Thursday FRC re-opened for editing."
+
+
+# ── Confirm zero on all (bulk) ────────────────────────────────────────────────
+# Sets value 0 + is_zero_flagged on every blank non-N/A cell of every non-
+# submitted row, in one action (BBP §6.4). Reversible per cell before Submit.
+
+@app.callback(
+    Output("app-state",   "data", allow_duplicate=True),
+    Output("form-values", "data", allow_duplicate=True),
+    Output("toast-store", "data", allow_duplicate=True),
+    Input("btn-confirm-zero-all", "n_clicks"),
+    State("app-state", "data"),
+    State("form-values", "data"),
+    prevent_initial_call=True,
+)
+def confirm_zero_all(n, app_data: dict, form_data: dict):
+    state = _merge(app_data, form_data)
+    if not n:
+        return dash.no_update, dash.no_update, dash.no_update
+
+    site, pl = state["site"], state["pl"]
+    if not _can_edit(site, state):
+        return dash.no_update, dash.no_update, f"⚠ No permission to edit {site}."
+
+    cols  = COLS_BY_PL[pl]
+    count = 0
+    for row in ROWS:
+        rid = row["id"]
+        if state["submitted"][site][pl].get(rid):
+            continue
+        na_cols = na_matrix(site, pl).get(rid, [])
+        blank = incomplete_cells(state["values"][site][pl][rid],
+                                 state["zero_flags"][site][pl][rid], na_cols, cols)
+        for cid in blank:
+            state["values"][site][pl][rid][cid]     = "0"
+            state["zero_flags"][site][pl][rid][cid] = True
+            count += 1
+
+    if not count:
+        return dash.no_update, dash.no_update, "No blank cells to confirm."
+    return _app_part(state), _form_part(state), f"✓ {count} blank cell(s) confirmed as zero"
+
+
+# ── Undo a confirmed zero (standard-row cell) ─────────────────────────────────
+
+@app.callback(
+    Output("app-state",   "data", allow_duplicate=True),
+    Output("form-values", "data", allow_duplicate=True),
+    Input({"type": "zero-revert", "row": ALL, "col": ALL}, "n_clicks"),
+    State("app-state", "data"),
+    State("form-values", "data"),
+    prevent_initial_call=True,
+)
+def revert_zero(n_list, app_data: dict, form_data: dict):
+    state = _merge(app_data, form_data)
+    triggered = ctx.triggered_id
+    if not triggered or not any(n_list):
+        return dash.no_update, dash.no_update
+
+    site, pl = state["site"], state["pl"]
+    if not _can_edit(site, state):
+        return dash.no_update, dash.no_update
+
+    rid, cid = triggered["row"], triggered["col"]
+    state["zero_flags"][site][pl][rid][cid] = False
+    state["values"][site][pl][rid][cid]     = ""
+    return _app_part(state), _form_part(state)
+
+
 # ── Save all / Submit all ─────────────────────────────────────────────────────
 
 @app.callback(
@@ -1307,13 +1595,23 @@ def bulk_action(n_save, n_submit, app_data: dict, form_data: dict):
 
     for row in ROWS:
         rid = row["id"]
-        # Friday FRC, WIP OT % and Actual have their own panel save/submit buttons.
-        if row["is_fri"] or row["is_ref"] or rid in ("wip_ot", "actual"):
+        # Panel rows (Friday FRC, Thursday FRC, WIP OT %, Actual) have their own
+        # panel save/submit buttons.
+        if row["is_fri"] or row["is_ref"] or rid in ("wip_ot", "actual", "thu_frc"):
             continue
         if state["submitted"][site][pl][rid]:
             continue
         if not _row_has_data(state, site, pl, rid):
             continue
+
+        # Submit (not Save): skip rows with blank non-N/A cells (BBP §6.4).
+        if not is_save:
+            na_cols = na_matrix(site, pl).get(rid, [])
+            if incomplete_cells(state["values"][site][pl][rid],
+                                state["zero_flags"][site][pl][rid],
+                                na_cols, COLS_BY_PL[pl]):
+                errors += 1
+                continue
 
         values, zero_flags, comments = _db_payload(state, site, pl, rid)
         try:
@@ -1346,6 +1644,38 @@ def bulk_action(n_save, n_submit, app_data: dict, form_data: dict):
         msg = "No open rows with data to save." if is_save else "No open rows with data."
 
     return _app_part(state), msg
+
+
+# ── CSV export ────────────────────────────────────────────────────────────────
+# Downloads the current week's gli_extract, filtered to the selected product
+# line (and site, unless GLOBAL is selected). BBP §6.9.
+
+@app.callback(
+    Output("csv-download", "data"),
+    Output("toast-store",  "data", allow_duplicate=True),
+    Input("btn-export-csv", "n_clicks"),
+    State("app-state", "data"),
+    prevent_initial_call=True,
+)
+def export_csv(n, state: dict):
+    if not n:
+        return dash.no_update, dash.no_update
+
+    week = current_week()["week_id"]
+    try:
+        df = cache.cached_gli_extract(week)
+    except Exception as exc:
+        return dash.no_update, f"⚠ Export failed — {exc}"
+
+    site, pl = state["site"], state["pl"]
+    df = df[df["product_line"] == pl]
+    if site != GLOBAL_SITE:
+        df = df[df["site"] == site]
+    if df.empty:
+        return dash.no_update, "No data to export for this week."
+
+    fname = f"volumes_wk{week}_{site}_{pl}.csv"
+    return dcc.send_data_frame(df.to_csv, fname, index=False), f"⤓ Exported {fname}"
 
 
 # ── Toast clientside callback ─────────────────────────────────────────────────
@@ -1455,6 +1785,38 @@ app.clientside_callback(
     Output({"type": "actual-comment-section", "col": ALL}, "style"),
     Input({"type": "actual-input", "col": ALL}, "value"),
     State({"type": "actual-input", "col": ALL}, "id"),
+    State("app-state", "data"),
+    State("form-values", "data"),
+    prevent_initial_call=True,
+)
+
+
+# ── Thursday FRC comment visibility (clientside) ──────────────────────────────
+# Mirror of the Friday FRC callback — diff-vs-Monday-FRC threshold.
+
+app.clientside_callback(
+    """
+    function(thu_values, ids, app_data, form_data) {
+        if (!app_data || !form_data || !Array.isArray(thu_values))
+            return window.dash_clientside.no_update;
+        var site = app_data.site, pl = app_data.pl;
+        var sliceVals = ((form_data.values || {})[site] || {})[pl] || {};
+        var mon_frc = sliceVals['mon_frc'] || {};
+        var THRESHOLD_ABS = 10, THRESHOLD_REL = 0.10;
+        return ids.map(function(id_obj, i) {
+            var cid = id_obj.col;
+            var thu = parseFloat(thu_values[i]);
+            var mon = parseFloat(mon_frc[cid]);
+            if (isNaN(thu) || isNaN(mon) || mon <= 0) return {"display": "none"};
+            var diff = mon - thu;
+            var below = diff >= THRESHOLD_ABS || diff / mon >= THRESHOLD_REL;
+            return below ? {} : {"display": "none"};
+        });
+    }
+    """,
+    Output({"type": "thu-comment-section", "col": ALL}, "style"),
+    Input({"type": "thu-input", "col": ALL}, "value"),
+    State({"type": "thu-input", "col": ALL}, "id"),
     State("app-state", "data"),
     State("form-values", "data"),
     prevent_initial_call=True,

@@ -100,6 +100,12 @@ def render_app_header(
             style={"display": "none" if is_readonly else "flex"},
             children=[
                 html.Button(
+                    ["⊘ ", "Confirm zero on all"],
+                    id="btn-confirm-zero-all",
+                    className="action-btn btn-save-all",
+                    n_clicks=0,
+                ),
+                html.Button(
                     ["⤓ ", "Save all drafts"],
                     id="btn-save-all",
                     className="action-btn btn-save-all",
@@ -109,6 +115,19 @@ def render_app_header(
                     ["↑ ", "Submit all open"],
                     id="btn-submit-all",
                     className="action-btn btn-submit-all",
+                    n_clicks=0,
+                ),
+            ],
+        ),
+
+        # CSV export — a read action, available also in read-only mode
+        html.Div(
+            className="header-export",
+            children=[
+                html.Button(
+                    ["⤓ ", "Export CSV"],
+                    id="btn-export-csv",
+                    className="action-btn btn-save-all",
                     n_clicks=0,
                 ),
             ],
