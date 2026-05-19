@@ -145,7 +145,9 @@ def get_current_week() -> dict[str, Any]:
     )
     if df.empty:
         raise RuntimeError(f"No open week found in {_T_WEEKS}")
-    return df.iloc[0].to_dict()
+    # Series.to_dict() is typed dict[Hashable, Any]; the columns are all
+    # strings, so rebuild with str keys to match the declared return type.
+    return {str(k): v for k, v in df.iloc[0].to_dict().items()}
 
 
 def create_week(week_id: int, year: int) -> None:
