@@ -208,8 +208,21 @@ body {
 }
 .data-cell-na {
   background: repeating-linear-gradient(
-    45deg, rgba(0,0,0,0.04) 0, rgba(0,0,0,0.04) 3px, transparent 3px, transparent 8px
+    45deg, rgba(0,0,0,0.07) 0, rgba(0,0,0,0.07) 3px, transparent 3px, transparent 8px
   );
+}
+/* Keep the N/A hatching visible after the row is saved (draft) or submitted —
+   the .is-draft/.is-submitted td tint would otherwise cover it. The hatch is
+   layered over the row tint so the cell still reads as part of that row. */
+.is-draft td.data-cell-na {
+  background:
+    repeating-linear-gradient(45deg, rgba(0,0,0,0.07) 0, rgba(0,0,0,0.07) 3px, transparent 3px, transparent 8px),
+    rgba(155,109,209,0.03) !important;
+}
+.is-submitted td.data-cell-na {
+  background:
+    repeating-linear-gradient(45deg, rgba(0,0,0,0.07) 0, rgba(0,0,0,0.07) 3px, transparent 3px, transparent 8px),
+    rgba(55,138,221,0.03) !important;
 }
 .data-cell-below { background: var(--red-cell); }
 
