@@ -232,9 +232,9 @@ def na_matrix(site: str, pl: str) -> dict[str, list[str]]:
 
 # Deadline schedule — local time per site, per submission type
 DEADLINES: dict[str, dict[str, str]] = {
-    "SEDICO":   {"py": "Thu 11:00", "siop": "Thu 11:00", "mon_frc": "Tue 18:00", "thu_frc": "Thu 11:00", "fri_frc": "Fri 15:00", "actual": "Next Mon 16:00", "eow_wip": "Next Mon 16:00", "wip_ot": "Next Mon 16:00"},
-    "ATLANTA":  {"py": "Wed EOD",   "siop": "Wed EOD",   "mon_frc": "Tue 11:00", "thu_frc": "Wed EOD",   "fri_frc": "Fri 09:00", "actual": "Next Mon 10:00", "eow_wip": "Next Mon 10:00", "wip_ot": "Next Mon 10:00"},
-    "TIJUANA":  {"py": "Wed EOD",   "siop": "Wed EOD",   "mon_frc": "Tue 11:00", "thu_frc": "Wed EOD",   "fri_frc": "Fri 09:00", "actual": "Next Mon 10:00", "eow_wip": "Next Mon 10:00", "wip_ot": "Next Mon 10:00"},
+    "SEDICO":   {"py": "Thu 11:00", "siop": "Thu 11:00", "mon_frc": "Thu 11:00", "thu_frc": "Thu 11:00", "fri_frc": "Fri 15:00", "actual": "Next Mon 16:00", "eow_wip": "Next Mon 16:00", "wip_ot": "Next Mon 16:00"},
+    "ATLANTA":  {"py": "Wed EOD",   "siop": "Wed EOD",   "mon_frc": "Wed EOD",   "thu_frc": "Wed EOD",   "fri_frc": "Fri 09:00", "actual": "Next Mon 10:00", "eow_wip": "Next Mon 10:00", "wip_ot": "Next Mon 10:00"},
+    "TIJUANA":  {"py": "Wed EOD",   "siop": "Wed EOD",   "mon_frc": "Wed EOD",   "thu_frc": "Wed EOD",   "fri_frc": "Fri 09:00", "actual": "Next Mon 10:00", "eow_wip": "Next Mon 10:00", "wip_ot": "Next Mon 10:00"},
     "DONGGUAN": {"py": "Thu 18:00", "siop": "Thu 18:00", "mon_frc": "Thu 18:00", "thu_frc": "Thu 18:00", "fri_frc": "Fri EOD",   "actual": "Next Mon 18:00", "eow_wip": "Next Mon 18:00", "wip_ot": "Next Mon 18:00"},
     "RAYONG":   {"py": "Thu 18:00", "siop": "Thu 18:00", "mon_frc": "Thu 18:00", "thu_frc": "Thu 18:00", "fri_frc": "Fri EOD",   "actual": "Next Mon 18:00", "eow_wip": "Next Mon 18:00", "wip_ot": "Next Mon 18:00"},
     "SUMARE":   {"py": "Wed EOD",   "siop": "Wed EOD",   "mon_frc": "Wed EOD",   "thu_frc": "Wed EOD",   "fri_frc": "Fri 10:00", "actual": "Next Mon 11:00", "eow_wip": "Next Mon 11:00", "wip_ot": "Next Mon 11:00"},
