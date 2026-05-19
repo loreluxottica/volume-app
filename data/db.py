@@ -109,7 +109,10 @@ def _exec(query: str, params: list | None = None) -> pd.DataFrame:
         try:
             with _get_conn().cursor() as cur:
                 cur.execute(query, params or [])
-                cols = [d[0] for d in cur.description]
+                # description is None until a result-set query has run; for
+                # the SELECTs here it is always populated — `or []` keeps the
+                # type checker happy and stays safe if it ever is None.
+                cols = [d[0] for d in (cur.description or [])]
                 return pd.DataFrame(cur.fetchall(), columns=cols)
         except Exception:
             _reset_conn()
