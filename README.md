@@ -14,7 +14,7 @@ volume-app/
 │   └── style.css       # Design system
 ├── components/
 │   ├── header.py       # Topbar + app-header
-│   └── data_table.py   # Tabella, summary bar, pannello Friday, legenda
+│   └── data_table.py   # Tabella, summary bar, pannelli Friday/WIP OT%/Actual, legenda
 ├── data/
 │   ├── schema.py       # Colonne, matrice N/A, scadenze
 │   └── db.py           # Lettura/scrittura Delta Lake (databricks-sql-connector)
@@ -25,6 +25,28 @@ volume-app/
 
 > Tutto il contenuto della repo sta nella root: la Databricks App è collegata
 > alla repo GitHub via URL (senza sottocartella), quindi deploia da qui.
+
+## Funzionalità
+
+Tabella settimanale: 8 righe di submission × canali, per ogni sito e product
+line (Frames / Wearables). Ogni riga si salva come bozza (Save) o si conferma
+(Submit) in modo indipendente.
+
+- **Righe a pannello** — `Friday FRC`, `WIP OT %` e `Actual` non si compilano
+  inline: un pulsante apre un pannello di data entry con una card per colonna
+  (valore + checkbox "Confirm zero" + commento), con Save/Submit propri.
+- **Commento obbligatorio sotto soglia** — la sezione commento compare/scompare
+  in tempo reale mentre si digita:
+  - `Friday FRC` e `Actual`: se lo scostamento vs Monday FRC è ≥ 10 Kpcs o ≥ 10%.
+  - `WIP OT %`: se il valore è ≤ 90%.
+- **Validazione celle vuote** — nelle righe a pannello ogni cella applicabile
+  deve avere un valore (anche 0) o essere marcata zero; in mancanza il Submit
+  si blocca ed evidenzia le celle incomplete.
+- **Zero esplicito** — la checkbox "Confirm zero" distingue lo zero voluto dalla
+  cella non compilata. Le celle N/A sono bloccate e tratteggiate.
+- **Vista GLOBAL** in sola lettura — somma di tutti i plant.
+- **Permessi** — lettura su tutti i siti, scrittura solo sul proprio
+  (tabella `app_access`).
 
 ## Deploy
 
@@ -183,7 +205,7 @@ Revoca: `DELETE FROM ... WHERE email = '...'` (eventualmente `AND site = '...'`)
 ## Item aperti prima della produzione
 
 - Confermare etichette/colonne Wearables di Dongguan (`repl_el`, `meta`, `dummy`)
-- Confermare lo scadenzario per sito (`data/schema.py` — `DEADLINES`)
+- Scadenzario per sito allineato al BBP v0.6 (`data/schema.py` — `DEADLINES`); conferma finale con MatteB
 - Mappare gli utenti non-admin → proprio plant (oggi i non-admin sono limitati
   a `OWN_SITE`; gli admin si gestiscono nella tabella `admins`)
 - Creare l'app di produzione
