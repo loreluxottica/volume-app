@@ -201,22 +201,21 @@ def get_submissions(week_id: int, site: str, product_line: str) -> pd.DataFrame:
 
 def get_latest_submissions(week_id: int, site: str, product_line: str) -> pd.DataFrame:
     """
-    Return the latest submission per (submission_type, channel) key — the most
-    recent row by timestamp. This is what the UI displays.
+    Return the latest submission per (submission_type, channel) key. The
+    authoritative row is the one with official_log = TRUE (maintained by
+    submit_row); QUALIFY is a cheap tie-break for the rare transient duplicate.
     """
     return _exec(
         f"""
         SELECT submission_type, channel, value_kpcs,
                is_zero_flagged, comment_preset, comment_other
-        FROM (
-            SELECT *, ROW_NUMBER() OVER (
-                PARTITION BY submission_type, channel
-                ORDER BY timestamp DESC
-            ) AS _rn
-            FROM {_T_SUBMISSIONS}
-            WHERE week_id = ? AND site = ? AND product_line = ?
-        )
-        WHERE _rn = 1
+        FROM {_T_SUBMISSIONS}
+        WHERE week_id = ? AND site = ? AND product_line = ?
+          AND official_log = TRUE
+        QUALIFY ROW_NUMBER() OVER (
+            PARTITION BY submission_type, channel
+            ORDER BY timestamp DESC
+        ) = 1
         """,
         [week_id, site, product_line],
     )
@@ -234,21 +233,7 @@ def submit_row(
 ) -> None:
     now = datetime.now(timezone.utc)
 
-    # Step 1: un-mark previous official rows (single round-trip)
-    _run(
-        f"""
-        UPDATE {_T_SUBMISSIONS}
-        SET official_log = FALSE
-        WHERE week_id = ?
-          AND site = ?
-          AND product_line = ?
-          AND submission_type = ?
-          AND official_log = TRUE
-        """,
-        [week_id, site, product_line, submission_type],
-    )
-
-    # Step 2: batch INSERT — one round-trip for ALL channels
+    # Build the rows for ALL channels first.
     rows_to_insert = []
     for channel, value in values.items():
         if value is None and not zero_flags.get(channel):
@@ -266,6 +251,8 @@ def submit_row(
     if not rows_to_insert:
         return
 
+    # Step 1: INSERT the new official rows FIRST. If this fails, the previous
+    # official rows are left untouched — a read still resolves correctly.
     placeholders = ", ".join(
         ["(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE, ?, ?, FALSE, NULL)"] * len(rows_to_insert)
     )
@@ -281,6 +268,23 @@ def submit_row(
         VALUES {placeholders}
         """,
         params,
+    )
+
+    # Step 2: demote the previous official rows. `timestamp < ?` keeps the rows
+    # just inserted (timestamp = now) as the only official ones — so even if
+    # this UPDATE fails, no key is ever left with zero official_log = TRUE rows.
+    _run(
+        f"""
+        UPDATE {_T_SUBMISSIONS}
+        SET official_log = FALSE
+        WHERE week_id = ?
+          AND site = ?
+          AND product_line = ?
+          AND submission_type = ?
+          AND official_log = TRUE
+          AND timestamp < ?
+        """,
+        [week_id, site, product_line, submission_type, now],
     )
 
 
@@ -396,8 +400,8 @@ def delete_draft(week_id: int, site: str, product_line: str,
 
 def get_gli_extract(week_id: int) -> pd.DataFrame:
     """
-    Return the full extract for a given week (all sites, both PLs) — the latest
-    value per key, picked by most recent timestamp. One query; used both by the
+    Return the full extract for a given week (all sites, both PLs) — the
+    authoritative row per key (official_log = TRUE). One query; used both by the
     Excel Dashboard and by the in-app GLOBAL view.
     """
     return _exec(
@@ -405,15 +409,12 @@ def get_gli_extract(week_id: int) -> pd.DataFrame:
         SELECT week_id, site, product_line, submission_type,
                channel, value_kpcs, is_zero_flagged,
                comment_preset, comment_other, timestamp, user_id
-        FROM (
-            SELECT *, ROW_NUMBER() OVER (
-                PARTITION BY site, product_line, submission_type, channel
-                ORDER BY timestamp DESC
-            ) AS _rn
-            FROM {_T_SUBMISSIONS}
-            WHERE week_id = ?
-        )
-        WHERE _rn = 1
+        FROM {_T_SUBMISSIONS}
+        WHERE week_id = ? AND official_log = TRUE
+        QUALIFY ROW_NUMBER() OVER (
+            PARTITION BY site, product_line, submission_type, channel
+            ORDER BY timestamp DESC
+        ) = 1
         ORDER BY site, product_line, submission_type, channel
         """,
         [week_id],
