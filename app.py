@@ -578,6 +578,7 @@ def update_row_values(values, app_data: dict, form_data: dict):
     Input({"type": "fri-input",      "col": ALL}, "value"),
     Input({"type": "fri-presets",    "col": ALL}, "value"),
     Input({"type": "fri-others",     "col": ALL}, "value"),
+    Input({"type": "wip-ot-input",   "col": ALL}, "value"),
     Input({"type": "wip-ot-presets", "col": ALL}, "value"),
     Input({"type": "wip-ot-others",  "col": ALL}, "value"),
     State("app-state", "data"),
@@ -585,7 +586,8 @@ def update_row_values(values, app_data: dict, form_data: dict):
     prevent_initial_call=True,
 )
 def update_fri_values(fri_vals, fri_presets, fri_others,
-                      wip_presets, wip_others, app_data: dict, form_data: dict):
+                      wip_inputs, wip_presets, wip_others,
+                      app_data: dict, form_data: dict):
     state = _merge(app_data, form_data)
     if not ctx.triggered or not _can_edit(state["site"], state):
         return dash.no_update
@@ -603,6 +605,8 @@ def update_fri_values(fri_vals, fri_presets, fri_others,
             state["fri_comments"][site][pl][col_id]["presets"] = val or []
         elif t == "fri-others":
             state["fri_comments"][site][pl][col_id]["others"] = val or ""
+        elif t == "wip-ot-input":
+            state["values"][site][pl]["wip_ot"][col_id] = str(val) if val is not None else ""
         elif t == "wip-ot-presets":
             state["wip_ot_comments"][site][pl][col_id]["presets"] = val or []
         elif t == "wip-ot-others":
@@ -640,6 +644,41 @@ def update_fri_zero(fri_zeros, app_data: dict, form_data: dict):
             state["zero_flags"][site][pl]["fri_frc"][col_id] = is_zero
             if is_zero:
                 state["values"][site][pl]["fri_frc"][col_id] = "0"
+            changed = True
+
+    if not changed:
+        return dash.no_update, dash.no_update
+    return _app_part(state), _form_part(state)
+
+
+# ── WIP OT zero-flag callback ─────────────────────────────────────────────────
+# Mirror of update_fri_zero — toggling "Confirm zero" disables the value input.
+
+@app.callback(
+    Output("app-state",   "data", allow_duplicate=True),
+    Output("form-values", "data", allow_duplicate=True),
+    Input({"type": "wip-ot-zero", "col": ALL}, "value"),
+    State("app-state", "data"),
+    State("form-values", "data"),
+    prevent_initial_call=True,
+)
+def update_wip_ot_zero(wip_zeros, app_data: dict, form_data: dict):
+    state = _merge(app_data, form_data)
+    if not ctx.triggered or not _can_edit(state["site"], state):
+        return dash.no_update, dash.no_update
+    site, pl = state["site"], state["pl"]
+    changed = False
+
+    for trigger in ctx.triggered:
+        id_dict = json.loads(trigger["prop_id"].split(".")[0])
+        if id_dict["type"] != "wip-ot-zero":
+            continue
+        col_id  = id_dict["col"]
+        is_zero = bool(trigger["value"])
+        if state["zero_flags"][site][pl]["wip_ot"].get(col_id, False) != is_zero:
+            state["zero_flags"][site][pl]["wip_ot"][col_id] = is_zero
+            if is_zero:
+                state["values"][site][pl]["wip_ot"][col_id] = "0"
             changed = True
 
     if not changed:
@@ -740,24 +779,6 @@ def submit_row(n_clicks_list, app_data: dict, form_data: dict):
     row_id = triggered["row"]
     if not _row_has_data(state, site, pl, row_id):
         return dash.no_update, "⚠ Enter at least one value before submitting."
-
-    # WIP OT: block submit if any column ≤ 90% and comment missing
-    if row_id == "wip_ot":
-        na_cols_wip = na_matrix(site, pl).get("wip_ot", [])
-        below = wip_ot_below_threshold(state["values"][site][pl]["wip_ot"],
-                                       na_cols_wip, COLS_BY_PL[pl])
-        if below:
-            woc = state.get("wip_ot_comments", {}).get(site, {}).get(pl, {})
-            missing_cmt = [
-                cid for cid in below
-                if not (woc.get(cid, {}).get("presets") or
-                        woc.get(cid, {}).get("others", "").strip())
-            ]
-            if missing_cmt:
-                state["submit_attempted"] = True
-                state["wip_ot_open"][site][pl] = True
-                missing_labels = [c["label"] for c in COLS_BY_PL[pl] if c["id"] in missing_cmt]
-                return _app_part(state), f"⚠ Comment required (WIP OT ≤ 90%): {', '.join(missing_labels)}"
 
     row_label = next(r["label"] for r in ROWS if r["id"] == row_id)
     values, zero_flags, comments = _db_payload(state, site, pl, row_id)
@@ -916,6 +937,123 @@ def change_fri(n, state: dict):
     return state, "Friday FRC re-opened for editing."
 
 
+# ── Save WIP OT % ─────────────────────────────────────────────────────────────
+
+@app.callback(
+    Output("app-state",   "data", allow_duplicate=True),
+    Output("toast-store", "data", allow_duplicate=True),
+    Input("btn-wip-ot-save",        "n_clicks"),
+    Input("btn-wip-ot-save-bottom", "n_clicks"),
+    State("app-state", "data"),
+    State("form-values", "data"),
+    prevent_initial_call=True,
+)
+def save_wip_ot(n1, n2, app_data: dict, form_data: dict):
+    state = _merge(app_data, form_data)
+    if not (n1 or n2):
+        return dash.no_update, dash.no_update
+
+    site, pl = state["site"], state["pl"]
+    if not _can_edit(site, state):
+        return dash.no_update, f"⚠ No permission to edit {site}."
+
+    if not _row_has_data(state, site, pl, "wip_ot"):
+        return dash.no_update, "⚠ Enter at least one value before saving."
+
+    values, zero_flags, comments = _db_payload(state, site, pl, "wip_ot")
+    week = current_week()["week_id"]
+    try:
+        db.save_draft(week, site, pl, state["user"],
+                      "wip_ot", values, zero_flags, comments)
+        cache.invalidate_drafts(week, site, pl, state["user"])
+    except Exception as exc:
+        return dash.no_update, f"⚠ Save failed — {exc}"
+
+    state["drafted"][site][pl]["wip_ot"] = True
+    return _app_part(state), "⤓ WIP OT % — draft saved"
+
+
+# ── Submit WIP OT % ───────────────────────────────────────────────────────────
+
+@app.callback(
+    Output("app-state",   "data", allow_duplicate=True),
+    Output("toast-store", "data", allow_duplicate=True),
+    Input("btn-wip-ot-submit",        "n_clicks"),
+    Input("btn-wip-ot-submit-bottom", "n_clicks"),
+    State("app-state", "data"),
+    State("form-values", "data"),
+    prevent_initial_call=True,
+)
+def submit_wip_ot(n1, n2, app_data: dict, form_data: dict):
+    state = _merge(app_data, form_data)
+    if not (n1 or n2):
+        return dash.no_update, dash.no_update
+
+    site, pl = state["site"], state["pl"]
+    if not _can_edit(site, state):
+        return dash.no_update, f"⚠ No permission to edit {site}."
+
+    na_cols = na_matrix(site, pl).get("wip_ot", [])
+    cols    = COLS_BY_PL[pl]
+
+    if not _row_has_data(state, site, pl, "wip_ot"):
+        state["submit_attempted"] = True
+        return _app_part(state), "⚠ Enter at least one value before submitting."
+
+    # Any column at or below 90% needs a comment.
+    vals      = state["values"][site][pl]["wip_ot"]
+    woc       = state["wip_ot_comments"][site][pl]
+    below_ids = wip_ot_below_threshold(vals, na_cols, cols)
+    missing = [
+        cid for cid in below_ids
+        if not (woc.get(cid, {}).get("presets") or woc.get(cid, {}).get("others", "").strip())
+    ]
+    if missing:
+        state["submit_attempted"] = True
+        missing_labels = [c["label"] for c in cols if c["id"] in missing]
+        return _app_part(state), f"⚠ Comment required: {', '.join(missing_labels)}"
+
+    values, zero_flags, comments = _db_payload(state, site, pl, "wip_ot")
+    week = current_week()["week_id"]
+    try:
+        db.submit_row(week, site, pl, state["user"],
+                      "wip_ot", values, zero_flags, comments)
+        db.delete_draft(week, site, pl, "wip_ot", state["user"])
+        cache.invalidate_submissions(week, site, pl)
+        cache.invalidate_drafts(week, site, pl, state["user"])
+    except Exception as exc:
+        return dash.no_update, f"⚠ Submit failed — {exc}"
+
+    state["submitted"][site][pl]["wip_ot"] = True
+    state["drafted"][site][pl]["wip_ot"]   = False
+    state["wip_ot_open"][site][pl]         = False
+    state["submit_attempted"]              = False
+    return _app_part(state), "✓ WIP OT % submitted"
+
+
+# ── Change WIP OT % submission ────────────────────────────────────────────────
+
+@app.callback(
+    Output("app-state",   "data", allow_duplicate=True),
+    Output("toast-store", "data", allow_duplicate=True),
+    Input("btn-wip-ot-change", "n_clicks"),
+    State("app-state", "data"),
+    prevent_initial_call=True,
+)
+def change_wip_ot(n, state: dict):
+    if not n:
+        return dash.no_update, dash.no_update
+
+    site, pl = state["site"], state["pl"]
+    if not _can_edit(site, state):
+        return dash.no_update, f"⚠ No permission to edit {site}."
+
+    state["submitted"][site][pl]["wip_ot"] = False
+    state["wip_ot_open"][site][pl]         = True
+    state["submit_attempted"]              = False
+    return state, "WIP OT % re-opened for editing."
+
+
 # ── Save all / Submit all ─────────────────────────────────────────────────────
 
 @app.callback(
@@ -944,30 +1082,13 @@ def bulk_action(n_save, n_submit, app_data: dict, form_data: dict):
 
     for row in ROWS:
         rid = row["id"]
-        if row["is_fri"] or row["is_ref"]:
+        # Friday FRC and WIP OT % have their own panel-level save/submit buttons.
+        if row["is_fri"] or row["is_ref"] or rid == "wip_ot":
             continue
         if state["submitted"][site][pl][rid]:
             continue
         if not _row_has_data(state, site, pl, rid):
             continue
-
-        # WIP OT: skip submit (not save) if comment missing for below-threshold cols
-        if rid == "wip_ot" and not is_save:
-            na_cols_wip = na_matrix(site, pl).get("wip_ot", [])
-            below = wip_ot_below_threshold(state["values"][site][pl]["wip_ot"],
-                                           na_cols_wip, COLS_BY_PL[pl])
-            if below:
-                woc = state.get("wip_ot_comments", {}).get(site, {}).get(pl, {})
-                missing_cmt = [
-                    cid for cid in below
-                    if not (woc.get(cid, {}).get("presets") or
-                            woc.get(cid, {}).get("others", "").strip())
-                ]
-                if missing_cmt:
-                    state["wip_ot_open"][site][pl] = True
-                    errors += 1
-                    print(f"[warn] bulk submit wip_ot: comment required for {missing_cmt}")
-                    continue
 
         values, zero_flags, comments = _db_payload(state, site, pl, rid)
         try:
@@ -1054,6 +1175,30 @@ app.clientside_callback(
     State({"type": "fri-input", "col": ALL}, "id"),
     State("app-state", "data"),
     State("form-values", "data"),
+    prevent_initial_call=True,
+)
+
+
+# ── WIP OT comment visibility (clientside) ────────────────────────────────────
+# Mirror of the Friday FRC callback: shows/hides each comment section in-browser
+# as the user types, with the flat WIP OT threshold (value ≤ 90%).
+
+app.clientside_callback(
+    """
+    function(wip_values, ids) {
+        if (!Array.isArray(wip_values))
+            return window.dash_clientside.no_update;
+        var THRESHOLD = 90;
+        return ids.map(function(id_obj, i) {
+            var v = parseFloat(wip_values[i]);
+            if (isNaN(v)) return {"display": "none"};
+            return v <= THRESHOLD ? {} : {"display": "none"};
+        });
+    }
+    """,
+    Output({"type": "wip-ot-comment-section", "col": ALL}, "style"),
+    Input({"type": "wip-ot-input", "col": ALL}, "value"),
+    State({"type": "wip-ot-input", "col": ALL}, "id"),
     prevent_initial_call=True,
 )
 

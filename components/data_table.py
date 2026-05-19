@@ -228,32 +228,80 @@ def render_friday_panel(
     ])
 
 
-# ── WIP OT comment panel ─────────────────────────────────────────────────────
+# ── WIP OT panel ──────────────────────────────────────────────────────────────
+# Full data-entry panel — an exact replica of the Friday FRC panel, but the
+# threshold is a flat value ≤ 90% (no Monday reference comparison).
 
 def render_wip_ot_panel(
     cols: list[dict],
     na_cols: list[str],
-    wip_ot_comments: dict,    # {col_id: {"presets": [], "others": ""}}
-    below_col_ids: list[str],
+    wip_ot_values: dict[str, str],
+    wip_ot_comments: dict[str, dict],   # {col_id: {presets:[], others:""}}
+    zero_flags: dict[str, bool],
     submit_attempted: bool,
 ) -> html.Div:
+    below_ids = set(wip_ot_below_threshold(wip_ot_values, na_cols, cols))
+
     missing = [
-        cid for cid in below_col_ids
+        cid for cid in below_ids
         if not (wip_ot_comments.get(cid, {}).get("presets")
                 or wip_ot_comments.get(cid, {}).get("others", "").strip())
     ]
     has_errors = submit_attempted and bool(missing)
+    warn_cols  = [c["label"] for c in cols if c["id"] in below_ids]
 
     cards = []
     for col in cols:
         cid = col["id"]
-        if cid not in below_col_ids:
+        if cid in na_cols:
             continue
-        comment_missing = submit_attempted and cid in missing
+
+        is_below  = cid in below_ids
+        comment_missing = submit_attempted and is_below and cid in missing
         fc = wip_ot_comments.get(cid, {"presets": [], "others": ""})
-        lbl_cls = "comment-label comment-label-error" if comment_missing else "comment-label"
-        cards.append(html.Div(className="fri-card fri-card-warn", children=[
-            html.Div(col["label"], className="fri-card-label"),
+        zf = zero_flags.get(cid, False)
+
+        card_cls = "fri-card"
+        if is_below:
+            card_cls += " fri-card-error" if comment_missing else " fri-card-warn"
+
+        input_cls = "fri-num-input"
+        if is_below:
+            input_cls += " fri-num-input-below"
+
+        card_children = [
+            # Label row
+            html.Div(className="fri-card-label-row", children=[
+                html.Span(col["label"], className="fri-card-label"),
+                html.Span("▼ ≤ 90%", className="below-badge") if is_below else None,
+            ]),
+            # Value input
+            dcc.Input(
+                id={"type": "wip-ot-input", "col": cid},
+                type="number",
+                min=0,
+                placeholder="—",
+                value=wip_ot_values.get(cid) or None,
+                disabled=zf,
+                className=input_cls,
+                debounce=False,
+            ),
+            # Zero flag checkbox
+            html.Div(className="zero-flag-row", children=[
+                dcc.Checklist(
+                    id={"type": "wip-ot-zero", "col": cid},
+                    options=[{"label": " Confirm zero (no shipments)", "value": "zero"}],
+                    value=["zero"] if zf else [],
+                    className="zero-flag-row",
+                ),
+            ]),
+        ]
+
+        # Comment section — always rendered; shown/hidden by clientside callback
+        lbl_cls = "comment-label"
+        if comment_missing:
+            lbl_cls += " comment-label-error"
+        comment_children = [
             html.Div(
                 "⚠ Comment required" if comment_missing else "Reason for WIP OT ≤ 90%",
                 className=lbl_cls,
@@ -270,17 +318,42 @@ def render_wip_ot_panel(
                 value=fc.get("others", ""),
                 className="others-input",
             ),
-        ]))
+        ]
+        card_children.append(html.Div(
+            id={"type": "wip-ot-comment-section", "col": cid},
+            className="comment-section",
+            children=comment_children,
+            style={} if is_below else {"display": "none"},
+        ))
 
-    warn_labels = [c["label"] for c in cols if c["id"] in below_col_ids]
+        cards.append(html.Div(className=card_cls, children=[c for c in card_children if c is not None]))
+
+    warn_text = []
+    if warn_cols:
+        warn_text = [
+            html.Br(),
+            html.Span(
+                f"⚠ {len(warn_cols)} column(s) ≤ 90% — comment required: {', '.join(warn_cols)}",
+                className="fri-warn",
+            ),
+        ]
+
     return html.Div(className="fri-panel-wrap", children=[
         html.Div(className="fri-panel-header", children=[
             html.Div(children=[
-                html.Div("WIP OT — comment required", className="fri-panel-title"),
-                html.Div(
-                    f"WIP OT ≤ 90% for: {', '.join(warn_labels)}. Comment mandatory before submitting.",
-                    className="fri-panel-sub",
-                ),
+                html.Div("WIP OT % — data entry", className="fri-panel-title"),
+                html.Div(className="fri-panel-sub", children=[
+                    "Threshold: a value ≤ 90% triggers a mandatory comment.",
+                    *warn_text,
+                ]),
+            ]),
+            html.Div(className="fri-panel-btn-row", children=[
+                html.Button(["⤓ ", "Save draft"],
+                    id="btn-wip-ot-save", className="action-btn btn-save",
+                    style={"minWidth": "110px"}, n_clicks=0),
+                html.Button(["↑ ", "Submit"],
+                    id="btn-wip-ot-submit", className="action-btn btn-open",
+                    style={"minWidth": "110px"}, n_clicks=0),
             ]),
         ]),
         html.Div(className="fri-grid", children=cards),
@@ -289,6 +362,12 @@ def render_wip_ot_panel(
                 f"⚠ Comment required: {', '.join(c['label'] for c in cols if c['id'] in missing)}",
                 className="validation-msg",
             ) if has_errors else None,
+            html.Button(["⤓ ", "Save draft"],
+                id="btn-wip-ot-save-bottom", className="action-btn btn-save",
+                style={"minWidth": "110px"}, n_clicks=0),
+            html.Button(["↑ ", "Submit WIP OT %"],
+                id="btn-wip-ot-submit-bottom", className="action-btn btn-open",
+                style={"minWidth": "110px"}, n_clicks=0),
         ]),
     ])
 
@@ -305,8 +384,6 @@ def render_standard_row(
     is_drafted: bool,
     deadline: str,
     is_readonly: bool,
-    wip_ot_open: bool | None = None,  # None = not the WIP OT row; bool = panel open state
-    wip_ot_has_below: bool = False,   # WIP OT row only: any column ≤ 90%?
 ) -> html.Tr:
     is_ref    = row["is_ref"]
     is_locked = is_ref and not is_submitted
@@ -380,39 +457,6 @@ def render_standard_row(
             className="action-btn btn-locked",
             disabled=True,
         )
-    elif row_id == "wip_ot" and wip_ot_open is not None:
-        # The comments toggle is always present (like the Friday FRC panel
-        # button). It only becomes actionable when a column is ≤ 90%.
-        if wip_ot_has_below:
-            toggle_btn = html.Button(
-                ["▲ Close comments" if wip_ot_open else "▼ Comments required"],
-                id="btn-wip-ot-toggle",
-                className="action-btn btn-fri" + (" btn-fri-open" if wip_ot_open else ""),
-                n_clicks=0,
-            )
-        else:
-            toggle_btn = html.Button(
-                ["Comments"],
-                id="btn-wip-ot-toggle",
-                className="action-btn btn-locked",
-                disabled=True,
-                n_clicks=0,
-            )
-        action = html.Div(className="action-split", children=[
-            html.Button(
-                ["⤓ ", "Saved" if is_drafted else "Save"],
-                id={"type": "btn-save", "row": row_id},
-                className=f"action-btn {'btn-draft' if is_drafted else 'btn-save'}",
-                n_clicks=0,
-            ),
-            toggle_btn,
-            html.Button(
-                ["↑ ", "Submit"],
-                id={"type": "btn-submit", "row": row_id},
-                className="action-btn btn-open",
-                n_clicks=0,
-            ),
-        ])
     else:
         action = html.Div(className="action-split", children=[
             html.Button(
@@ -509,6 +553,79 @@ def render_friday_row(
     ])
 
 
+# ── WIP OT summary row ────────────────────────────────────────────────────────
+# Mirror of render_friday_row: a display-only row with a single toggle button
+# that opens the WIP OT data-entry panel.
+
+def render_wip_ot_row(
+    cols: list[dict],
+    na_cols: list[str],
+    wip_ot_values: dict[str, str],
+    zero_flags: dict[str, bool],
+    is_submitted: bool,
+    is_drafted: bool,
+    wip_ot_open: bool,
+    deadline: str,
+    is_readonly: bool,
+) -> html.Tr:
+    below_ids = set(wip_ot_below_threshold(wip_ot_values, na_cols, cols))
+
+    dot_var = _dot_color("wip_ot", {"wip_ot": is_submitted}, {"wip_ot": is_drafted})
+    row_cls = "data-row" + (" is-submitted" if is_submitted else " is-draft" if is_drafted else "")
+
+    data_cells = []
+    for col in cols:
+        cid = col["id"]
+        if cid in na_cols:
+            data_cells.append(html.Td(className="data-cell data-cell-na"))
+            continue
+
+        zf = zero_flags.get(cid, False)
+        if zf:
+            data_cells.append(html.Td(className="data-cell", children=[
+                html.Div(className="zero-cell", children=[html.Span("ZERO ✓", className="zero-label")])
+            ]))
+            continue
+
+        val = wip_ot_values.get(cid, "")
+        is_below = cid in below_ids and not is_submitted
+        cell_cls = "data-cell" + (" data-cell-below" if is_below else "")
+        disp_cls = "fri-display" + (" fri-display-below" if is_below else " fri-display-empty" if not val else "")
+        data_cells.append(html.Td(className=cell_cls, children=[
+            html.Span(val or "—", className=disp_cls),
+        ]))
+
+    if is_submitted:
+        action = html.Button(
+            ["↩ ", "Change submission"],
+            id="btn-wip-ot-change",
+            className="action-btn btn-submitted",
+            n_clicks=0,
+        )
+    elif is_readonly:
+        action = html.Button(["👁 ", "Read only"], className="action-btn btn-locked", disabled=True)
+    else:
+        btn_cls = "action-btn btn-fri" + (" btn-fri-open" if wip_ot_open else "")
+        action = html.Button(
+            ["▲ Close panel" if wip_ot_open else "▼ Enter WIP OT %"],
+            id="btn-wip-ot-toggle",
+            className=btn_cls,
+            n_clicks=0,
+        )
+
+    return html.Tr(className=row_cls, children=[
+        html.Td(className="label-cell", children=[
+            html.Div(className="row-name-wrap", children=[
+                _dot(dot_var),
+                html.Span("WIP OT %", className="row-name", style={"marginLeft": "7px"}),
+            ]),
+            html.Div(deadline, className="deadline-tag"),
+        ]),
+        *data_cells,
+        html.Td(className="action-cell", children=[action]),
+    ])
+
+
 # ── full table ────────────────────────────────────────────────────────────────
 
 def render_data_table(
@@ -529,13 +646,6 @@ def render_data_table(
     na_map = na_matrix(current_site, current_pl)
     dl     = DEADLINES.get(current_site, {})   # GLOBAL has no deadlines
     is_global = current_site == "GLOBAL"
-
-    # Pre-compute WIP OT below-threshold columns once for the whole table
-    wip_ot_na = na_map.get("wip_ot", [])
-    wip_ot_below = wip_ot_below_threshold(form_values.get("wip_ot", {}), wip_ot_na, cols)
-    wip_ot_has_below = bool(wip_ot_below)
-    # The comments panel only opens when at least one column is ≤ 90%.
-    wip_ot_panel_open = wip_ot_open and wip_ot_has_below
 
     thead_rows = render_table_header(cols, current_site, current_pl)
 
@@ -568,6 +678,28 @@ def render_data_table(
                         submit_attempted=submit_attempted,
                     ),
                 )))
+        elif rid == "wip_ot":
+            tbody_rows.append(render_wip_ot_row(
+                cols=cols, na_cols=na_cols,
+                wip_ot_values=form_values.get(rid, {}),
+                zero_flags=zero_flags.get(rid, {}),
+                is_submitted=submitted.get(rid, False),
+                is_drafted=drafted.get(rid, False),
+                wip_ot_open=wip_ot_open,
+                deadline=dl.get(rid, ""),
+                is_readonly=is_readonly,
+            ))
+            if wip_ot_open and not submitted.get(rid) and not is_readonly:
+                tbody_rows.append(html.Tr(html.Td(
+                    colSpan=len(cols) + 2,
+                    children=render_wip_ot_panel(
+                        cols=cols, na_cols=na_cols,
+                        wip_ot_values=form_values.get(rid, {}),
+                        wip_ot_comments=wip_ot_comments or {},
+                        zero_flags=zero_flags.get(rid, {}),
+                        submit_attempted=submit_attempted,
+                    ),
+                )))
         else:
             tbody_rows.append(render_standard_row(
                 row=row, cols=cols, na_cols=na_cols,
@@ -577,20 +709,7 @@ def render_data_table(
                 is_drafted=drafted.get(rid, False),
                 deadline=dl.get(rid, ""),
                 is_readonly=is_readonly,
-                wip_ot_open=wip_ot_panel_open if rid == "wip_ot" else None,
-                wip_ot_has_below=wip_ot_has_below if rid == "wip_ot" else False,
             ))
-            # WIP OT comment panel (expanded below the row)
-            if rid == "wip_ot" and wip_ot_panel_open:
-                tbody_rows.append(html.Tr(html.Td(
-                    colSpan=len(cols) + 2,
-                    children=render_wip_ot_panel(
-                        cols=cols, na_cols=wip_ot_na,
-                        wip_ot_comments=wip_ot_comments or {},
-                        below_col_ids=wip_ot_below,
-                        submit_attempted=submit_attempted,
-                    ),
-                )))
 
     # Label and action columns are fixed; data columns share the remaining
     # width equally (table-layout:fixed) — uniform and adaptive to the screen.
