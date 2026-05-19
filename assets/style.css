@@ -224,6 +224,13 @@ body {
     repeating-linear-gradient(45deg, rgba(0,0,0,0.07) 0, rgba(0,0,0,0.07) 3px, transparent 3px, transparent 8px),
     rgba(55,138,221,0.03) !important;
 }
+/* Keep the N/A hatching on row hover too — the .data-row:hover tint would
+   otherwise cover it. */
+.data-row:hover td.data-cell-na {
+  background:
+    repeating-linear-gradient(45deg, rgba(0,0,0,0.07) 0, rgba(0,0,0,0.07) 3px, transparent 3px, transparent 8px),
+    rgba(0,0,0,0.013);
+}
 .data-cell-below { background: var(--red-cell); }
 
 /* Number inputs */
