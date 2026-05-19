@@ -316,6 +316,12 @@ body {
 .fri-num-input::-webkit-inner-spin-button { -webkit-appearance: none; }
 .fri-num-input:focus { border-color: var(--blue); box-shadow: 0 0 0 2px rgba(55,138,221,0.15); }
 .fri-num-input-below { border-color: var(--red-border); color: #8b2e1a; }
+/* Blank required cell flagged after a submit attempt (BBP §6.4) */
+.fri-num-input-incomplete {
+  border-color: var(--red-border);
+  background: var(--red-bg);
+  box-shadow: 0 0 0 2px rgba(200,55,55,0.12);
+}
 
 /* Comment section */
 .comment-section { display: flex; flex-direction: column; gap: 5px; }

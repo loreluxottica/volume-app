@@ -23,3 +23,6 @@ env/
 .agents/
 .DS_Store
 Thumbs.db
+
+volumes_bbp_v06.docx
+_docx_dump.txt

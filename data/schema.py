@@ -302,6 +302,26 @@ def cols_below_threshold(fri_values: dict, mon_values: dict,
     return result
 
 
+def incomplete_cells(values: dict, zero_flags: dict, na_cols: list[str],
+                     cols: list[dict]) -> list[str]:
+    """
+    Column ids that are applicable (non-N/A), not zero-flagged, and left blank.
+    A blank applicable cell blocks submission for the panel rows (BBP §6.4).
+    Shared by panel rendering and submit-time validation — single source.
+    """
+    result: list[str] = []
+    for col in cols:
+        cid = col["id"]
+        if cid in na_cols:
+            continue
+        if zero_flags.get(cid, False):
+            continue
+        raw = values.get(cid, "")
+        if raw is None or str(raw).strip() == "":
+            result.append(cid)
+    return result
+
+
 def wip_ot_below_threshold(values: dict, na_cols: list[str],
                             cols: list[dict]) -> list[str]:
     """Column ids where WIP OT value <= WIP_OT_THRESHOLD (comment mandatory)."""

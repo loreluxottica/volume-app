@@ -24,7 +24,7 @@ from components.data_table import render_data_table
 from data import cache, db
 from data.schema import (
     ROWS, COLS_BY_PL, na_matrix, SITES,
-    cols_below_threshold, wip_ot_below_threshold,
+    cols_below_threshold, wip_ot_below_threshold, incomplete_cells,
 )
 
 # ── App init ──────────────────────────────────────────────────────────────────
@@ -194,6 +194,8 @@ def _load_slice(state: dict, site: str, pl: str) -> bool:
             preset = _cell_str(r.get("comment_preset"))
             if preset and cid in state["wip_ot_comments"][site][pl]:
                 state["wip_ot_comments"][site][pl][cid]["presets"] = [p for p in preset.split(",") if p]
+        elif rid == "actual":
+            _apply_comment(state["actual_comments"][site][pl], cid, r)
 
     # Drafts are loaded for sites the user can edit.
     if _can_edit(site, state):
@@ -222,6 +224,8 @@ def _load_slice(state: dict, site: str, pl: str) -> bool:
                     preset = _cell_str(r.get("comment_preset"))
                     if preset and cid in state["wip_ot_comments"][site][pl]:
                         state["wip_ot_comments"][site][pl][cid]["presets"] = [p for p in preset.split(",") if p]
+                elif rid == "actual":
+                    _apply_comment(state["actual_comments"][site][pl], cid, r)
 
     state["loaded"].append(key)
     return True
@@ -303,6 +307,13 @@ def _db_payload(state: dict, site: str, pl: str, row_id: str):
                 "presets": fc.get("presets", []),
                 "others":  fc.get("others", ""),
             }
+    elif row_id == "actual":
+        for cid in values:
+            fc = state.get("actual_comments", {}).get(site, {}).get(pl, {}).get(cid, {})
+            comments[cid] = {
+                "presets": fc.get("presets", []),
+                "others":  fc.get("others", ""),
+            }
     return values, zero_flags, comments
 
 
@@ -331,6 +342,8 @@ def _empty_state() -> dict:
         "loaded":         [],   # ["site|pl", ...] slices fetched from the DB
         "wip_ot_comments": {},  # {site: {pl: {col_id: {"presets":[], "others":""}}}}
         "wip_ot_open":    {},   # {site: {pl: bool}}
+        "actual_comments": {},  # {site: {pl: {col_id: {"presets":[], "others":""}}}}
+        "actual_open":    {},   # {site: {pl: bool}}
     }
     for s in SITES:
         state["values"][s]           = {}
@@ -340,6 +353,8 @@ def _empty_state() -> dict:
         state["fri_comments"][s]     = {}
         state["wip_ot_comments"][s]  = {}
         state["wip_ot_open"][s]      = {}
+        state["actual_comments"][s]  = {}
+        state["actual_open"][s]      = {}
         for pl in ["FRAMES", "WEARABLES"]:
             cols = COLS_BY_PL[pl]
             state["values"][s][pl]          = {r["id"]: {c["id"]: "" for c in cols} for r in ROWS}
@@ -349,6 +364,8 @@ def _empty_state() -> dict:
             state["fri_comments"][s][pl]    = {c["id"]: {"presets": [], "others": ""} for c in cols}
             state["wip_ot_comments"][s][pl] = {c["id"]: {"presets": [], "others": ""} for c in cols}
             state["wip_ot_open"][s][pl]     = False
+            state["actual_comments"][s][pl] = {c["id"]: {"presets": [], "others": ""} for c in cols}
+            state["actual_open"][s][pl]     = False
 
     return state
 
@@ -361,7 +378,7 @@ def _empty_state() -> dict:
 # Callbacks merge the two into one dict, run the existing logic, then split the
 # result back — so the DB/state helpers stay unchanged.
 
-_FORM_KEYS = ("values", "fri_comments", "wip_ot_comments")
+_FORM_KEYS = ("values", "fri_comments", "wip_ot_comments", "actual_comments")
 
 
 def _form_part(s: dict) -> dict:
@@ -466,6 +483,7 @@ def render_ui(app_data: dict, form_data: dict):
         submitted = {r["id"]: False for r in ROWS}
         drafted   = {r["id"]: False for r in ROWS}
         zf, fc, woc, woo = {}, {}, {}, False
+        ac, ao    = {}, False
     else:
         submitted = state["submitted"][site][pl]
         drafted   = state["drafted"][site][pl]
@@ -474,6 +492,8 @@ def render_ui(app_data: dict, form_data: dict):
         fc        = state["fri_comments"][site][pl]
         woc       = state.get("wip_ot_comments", {}).get(site, {}).get(pl, {})
         woo       = state.get("wip_ot_open", {}).get(site, {}).get(pl, False)
+        ac        = state.get("actual_comments", {}).get(site, {}).get(pl, {})
+        ao        = state.get("actual_open", {}).get(site, {}).get(pl, False)
 
     header = render_app_header(
         current_site=site, current_pl=pl,
@@ -488,6 +508,7 @@ def render_ui(app_data: dict, form_data: dict):
         fri_open=fri_open, submit_attempted=sa,
         is_readonly=is_ro,
         wip_ot_comments=woc, wip_ot_open=woo,
+        actual_comments=ac, actual_open=ao,
     )
     return topbar, header, body
 
@@ -581,12 +602,16 @@ def update_row_values(values, app_data: dict, form_data: dict):
     Input({"type": "wip-ot-input",   "col": ALL}, "value"),
     Input({"type": "wip-ot-presets", "col": ALL}, "value"),
     Input({"type": "wip-ot-others",  "col": ALL}, "value"),
+    Input({"type": "actual-input",   "col": ALL}, "value"),
+    Input({"type": "actual-presets", "col": ALL}, "value"),
+    Input({"type": "actual-others",  "col": ALL}, "value"),
     State("app-state", "data"),
     State("form-values", "data"),
     prevent_initial_call=True,
 )
 def update_fri_values(fri_vals, fri_presets, fri_others,
                       wip_inputs, wip_presets, wip_others,
+                      act_inputs, act_presets, act_others,
                       app_data: dict, form_data: dict):
     state = _merge(app_data, form_data)
     if not ctx.triggered or not _can_edit(state["site"], state):
@@ -611,6 +636,12 @@ def update_fri_values(fri_vals, fri_presets, fri_others,
             state["wip_ot_comments"][site][pl][col_id]["presets"] = val or []
         elif t == "wip-ot-others":
             state["wip_ot_comments"][site][pl][col_id]["others"] = val or ""
+        elif t == "actual-input":
+            state["values"][site][pl]["actual"][col_id] = str(val) if val is not None else ""
+        elif t == "actual-presets":
+            state["actual_comments"][site][pl][col_id]["presets"] = val or []
+        elif t == "actual-others":
+            state["actual_comments"][site][pl][col_id]["others"] = val or ""
 
     return _form_part(state)
 
@@ -686,6 +717,41 @@ def update_wip_ot_zero(wip_zeros, app_data: dict, form_data: dict):
     return _app_part(state), _form_part(state)
 
 
+# ── Actual zero-flag callback ─────────────────────────────────────────────────
+# Mirror of update_fri_zero — toggling "Confirm zero" disables the value input.
+
+@app.callback(
+    Output("app-state",   "data", allow_duplicate=True),
+    Output("form-values", "data", allow_duplicate=True),
+    Input({"type": "actual-zero", "col": ALL}, "value"),
+    State("app-state", "data"),
+    State("form-values", "data"),
+    prevent_initial_call=True,
+)
+def update_actual_zero(actual_zeros, app_data: dict, form_data: dict):
+    state = _merge(app_data, form_data)
+    if not ctx.triggered or not _can_edit(state["site"], state):
+        return dash.no_update, dash.no_update
+    site, pl = state["site"], state["pl"]
+    changed = False
+
+    for trigger in ctx.triggered:
+        id_dict = json.loads(trigger["prop_id"].split(".")[0])
+        if id_dict["type"] != "actual-zero":
+            continue
+        col_id  = id_dict["col"]
+        is_zero = bool(trigger["value"])
+        if state["zero_flags"][site][pl]["actual"].get(col_id, False) != is_zero:
+            state["zero_flags"][site][pl]["actual"][col_id] = is_zero
+            if is_zero:
+                state["values"][site][pl]["actual"][col_id] = "0"
+            changed = True
+
+    if not changed:
+        return dash.no_update, dash.no_update
+    return _app_part(state), _form_part(state)
+
+
 # ── Friday panel toggle ───────────────────────────────────────────────────────
 
 @app.callback(
@@ -715,6 +781,23 @@ def toggle_wip_ot_panel(n, state: dict):
     site, pl = state["site"], state["pl"]
     current = state.get("wip_ot_open", {}).get(site, {}).get(pl, False)
     state["wip_ot_open"][site][pl] = not current
+    return state
+
+
+# ── Actual panel toggle ───────────────────────────────────────────────────────
+
+@app.callback(
+    Output("app-state", "data", allow_duplicate=True),
+    Input("btn-actual-toggle", "n_clicks"),
+    State("app-state", "data"),
+    prevent_initial_call=True,
+)
+def toggle_actual_panel(n, state: dict):
+    if not n:
+        return dash.no_update
+    site, pl = state["site"], state["pl"]
+    current = state.get("actual_open", {}).get(site, {}).get(pl, False)
+    state["actual_open"][site][pl] = not current
     return state
 
 
@@ -882,10 +965,18 @@ def submit_fri(n1, n2, app_data: dict, form_data: dict):
         state["submit_attempted"] = True
         return _app_part(state), "⚠ Enter at least one value before submitting."
 
-    # A Friday cell that dropped below threshold vs Monday needs a comment.
     vals      = state["values"][site][pl]["fri_frc"]
     mon_vals  = state["values"][site][pl].get("mon_frc", {})
     fc        = state["fri_comments"][site][pl]
+
+    # Every applicable cell must have a value or be zero-flagged (BBP §6.4).
+    blank = incomplete_cells(vals, state["zero_flags"][site][pl]["fri_frc"], na_cols, cols)
+    if blank:
+        state["submit_attempted"] = True
+        blank_labels = [c["label"] for c in cols if c["id"] in blank]
+        return _app_part(state), f"⚠ Fill or confirm zero for all cells: {', '.join(blank_labels)}"
+
+    # A Friday cell that dropped below threshold vs Monday needs a comment.
     below_ids = cols_below_threshold(vals, mon_vals, na_cols, cols)
     missing = [
         cid for cid in below_ids
@@ -1000,9 +1091,17 @@ def submit_wip_ot(n1, n2, app_data: dict, form_data: dict):
         state["submit_attempted"] = True
         return _app_part(state), "⚠ Enter at least one value before submitting."
 
-    # Any column at or below 90% needs a comment.
     vals      = state["values"][site][pl]["wip_ot"]
     woc       = state["wip_ot_comments"][site][pl]
+
+    # Every applicable cell must have a value or be zero-flagged (BBP §6.4).
+    blank = incomplete_cells(vals, state["zero_flags"][site][pl]["wip_ot"], na_cols, cols)
+    if blank:
+        state["submit_attempted"] = True
+        blank_labels = [c["label"] for c in cols if c["id"] in blank]
+        return _app_part(state), f"⚠ Fill or confirm zero for all cells: {', '.join(blank_labels)}"
+
+    # Any column at or below 90% needs a comment.
     below_ids = wip_ot_below_threshold(vals, na_cols, cols)
     missing = [
         cid for cid in below_ids
@@ -1054,6 +1153,132 @@ def change_wip_ot(n, state: dict):
     return state, "WIP OT % re-opened for editing."
 
 
+# ── Save Actual ───────────────────────────────────────────────────────────────
+
+@app.callback(
+    Output("app-state",   "data", allow_duplicate=True),
+    Output("toast-store", "data", allow_duplicate=True),
+    Input("btn-actual-save",        "n_clicks"),
+    Input("btn-actual-save-bottom", "n_clicks"),
+    State("app-state", "data"),
+    State("form-values", "data"),
+    prevent_initial_call=True,
+)
+def save_actual(n1, n2, app_data: dict, form_data: dict):
+    state = _merge(app_data, form_data)
+    if not (n1 or n2):
+        return dash.no_update, dash.no_update
+
+    site, pl = state["site"], state["pl"]
+    if not _can_edit(site, state):
+        return dash.no_update, f"⚠ No permission to edit {site}."
+
+    if not _row_has_data(state, site, pl, "actual"):
+        return dash.no_update, "⚠ Enter at least one value before saving."
+
+    values, zero_flags, comments = _db_payload(state, site, pl, "actual")
+    week = current_week()["week_id"]
+    try:
+        db.save_draft(week, site, pl, state["user"],
+                      "actual", values, zero_flags, comments)
+        cache.invalidate_drafts(week, site, pl, state["user"])
+    except Exception as exc:
+        return dash.no_update, f"⚠ Save failed — {exc}"
+
+    state["drafted"][site][pl]["actual"] = True
+    return _app_part(state), "⤓ Actual — draft saved"
+
+
+# ── Submit Actual ─────────────────────────────────────────────────────────────
+
+@app.callback(
+    Output("app-state",   "data", allow_duplicate=True),
+    Output("toast-store", "data", allow_duplicate=True),
+    Input("btn-actual-submit",        "n_clicks"),
+    Input("btn-actual-submit-bottom", "n_clicks"),
+    State("app-state", "data"),
+    State("form-values", "data"),
+    prevent_initial_call=True,
+)
+def submit_actual(n1, n2, app_data: dict, form_data: dict):
+    state = _merge(app_data, form_data)
+    if not (n1 or n2):
+        return dash.no_update, dash.no_update
+
+    site, pl = state["site"], state["pl"]
+    if not _can_edit(site, state):
+        return dash.no_update, f"⚠ No permission to edit {site}."
+
+    na_cols = na_matrix(site, pl).get("actual", [])
+    cols    = COLS_BY_PL[pl]
+
+    if not _row_has_data(state, site, pl, "actual"):
+        state["submit_attempted"] = True
+        return _app_part(state), "⚠ Enter at least one value before submitting."
+
+    vals      = state["values"][site][pl]["actual"]
+    mon_vals  = state["values"][site][pl].get("mon_frc", {})
+    ac        = state["actual_comments"][site][pl]
+
+    # Every applicable cell must have a value or be zero-flagged (BBP §6.4).
+    blank = incomplete_cells(vals, state["zero_flags"][site][pl]["actual"], na_cols, cols)
+    if blank:
+        state["submit_attempted"] = True
+        blank_labels = [c["label"] for c in cols if c["id"] in blank]
+        return _app_part(state), f"⚠ Fill or confirm zero for all cells: {', '.join(blank_labels)}"
+
+    # An Actual cell that dropped below threshold vs Monday needs a comment.
+    below_ids = cols_below_threshold(vals, mon_vals, na_cols, cols)
+    missing = [
+        cid for cid in below_ids
+        if not (ac.get(cid, {}).get("presets") or ac.get(cid, {}).get("others", "").strip())
+    ]
+    if missing:
+        state["submit_attempted"] = True
+        missing_labels = [c["label"] for c in cols if c["id"] in missing]
+        return _app_part(state), f"⚠ Comment required: {', '.join(missing_labels)}"
+
+    values, zero_flags, comments = _db_payload(state, site, pl, "actual")
+    week = current_week()["week_id"]
+    try:
+        db.submit_row(week, site, pl, state["user"],
+                      "actual", values, zero_flags, comments)
+        db.delete_draft(week, site, pl, "actual", state["user"])
+        cache.invalidate_submissions(week, site, pl)
+        cache.invalidate_drafts(week, site, pl, state["user"])
+    except Exception as exc:
+        return dash.no_update, f"⚠ Submit failed — {exc}"
+
+    state["submitted"][site][pl]["actual"] = True
+    state["drafted"][site][pl]["actual"]   = False
+    state["actual_open"][site][pl]         = False
+    state["submit_attempted"]              = False
+    return _app_part(state), "✓ Actual submitted"
+
+
+# ── Change Actual submission ──────────────────────────────────────────────────
+
+@app.callback(
+    Output("app-state",   "data", allow_duplicate=True),
+    Output("toast-store", "data", allow_duplicate=True),
+    Input("btn-actual-change", "n_clicks"),
+    State("app-state", "data"),
+    prevent_initial_call=True,
+)
+def change_actual(n, state: dict):
+    if not n:
+        return dash.no_update, dash.no_update
+
+    site, pl = state["site"], state["pl"]
+    if not _can_edit(site, state):
+        return dash.no_update, f"⚠ No permission to edit {site}."
+
+    state["submitted"][site][pl]["actual"] = False
+    state["actual_open"][site][pl]         = True
+    state["submit_attempted"]              = False
+    return state, "Actual re-opened for editing."
+
+
 # ── Save all / Submit all ─────────────────────────────────────────────────────
 
 @app.callback(
@@ -1082,8 +1307,8 @@ def bulk_action(n_save, n_submit, app_data: dict, form_data: dict):
 
     for row in ROWS:
         rid = row["id"]
-        # Friday FRC and WIP OT % have their own panel-level save/submit buttons.
-        if row["is_fri"] or row["is_ref"] or rid == "wip_ot":
+        # Friday FRC, WIP OT % and Actual have their own panel save/submit buttons.
+        if row["is_fri"] or row["is_ref"] or rid in ("wip_ot", "actual"):
             continue
         if state["submitted"][site][pl][rid]:
             continue
@@ -1199,6 +1424,39 @@ app.clientside_callback(
     Output({"type": "wip-ot-comment-section", "col": ALL}, "style"),
     Input({"type": "wip-ot-input", "col": ALL}, "value"),
     State({"type": "wip-ot-input", "col": ALL}, "id"),
+    prevent_initial_call=True,
+)
+
+
+# ── Actual comment visibility (clientside) ────────────────────────────────────
+# Mirror of the Friday FRC callback: shows/hides each comment section in-browser
+# as the user types, with the diff-vs-Monday-FRC threshold.
+
+app.clientside_callback(
+    """
+    function(actual_values, ids, app_data, form_data) {
+        if (!app_data || !form_data || !Array.isArray(actual_values))
+            return window.dash_clientside.no_update;
+        var site = app_data.site, pl = app_data.pl;
+        var sliceVals = ((form_data.values || {})[site] || {})[pl] || {};
+        var mon_frc = sliceVals['mon_frc'] || {};
+        var THRESHOLD_ABS = 10, THRESHOLD_REL = 0.10;
+        return ids.map(function(id_obj, i) {
+            var cid = id_obj.col;
+            var act = parseFloat(actual_values[i]);
+            var mon = parseFloat(mon_frc[cid]);
+            if (isNaN(act) || isNaN(mon) || mon <= 0) return {"display": "none"};
+            var diff = mon - act;
+            var below = diff >= THRESHOLD_ABS || diff / mon >= THRESHOLD_REL;
+            return below ? {} : {"display": "none"};
+        });
+    }
+    """,
+    Output({"type": "actual-comment-section", "col": ALL}, "style"),
+    Input({"type": "actual-input", "col": ALL}, "value"),
+    State({"type": "actual-input", "col": ALL}, "id"),
+    State("app-state", "data"),
+    State("form-values", "data"),
     prevent_initial_call=True,
 )
 
