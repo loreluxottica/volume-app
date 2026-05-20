@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 
 import dash
-from dash import Input, Output, State, ctx, dcc, html, ALL
+from dash import Input, Output, State, ctx, dcc, html, ALL, Patch
 
 from components.header import render_topbar, render_app_header
 from components.data_table import render_data_table
@@ -575,6 +575,13 @@ def change_site(site: str, app_data: dict, form_data: dict):
 def switch_pl(n_frames, n_wear, app_data: dict, form_data: dict):
     state = _merge(app_data, form_data)
     triggered = ctx.triggered_id
+    # Guard: a header re-render re-sets n_clicks=0 on the tab buttons, which
+    # Dash can interpret as a prop change and fire this callback spuriously.
+    # Only act on a real user click (the triggered tab's n_clicks must be > 0).
+    if triggered == "tab-frames" and not n_frames:
+        return dash.no_update, dash.no_update, dash.no_update
+    if triggered == "tab-wearables" and not n_wear:
+        return dash.no_update, dash.no_update, dash.no_update
     new_pl = "FRAMES" if triggered == "tab-frames" else "WEARABLES"
     if new_pl == state["pl"]:
         return dash.no_update, dash.no_update, dash.no_update
@@ -599,18 +606,19 @@ def switch_pl(n_frames, n_wear, app_data: dict, form_data: dict):
     prevent_initial_call=True,
 )
 def update_row_values(values, app_data: dict, form_data: dict):
-    state = _merge(app_data, form_data)
-    if not ctx.triggered or not _can_edit(state["site"], state):
+    # Patch keeps cell updates from racing — see update_fri_values for the
+    # full rationale.
+    if not ctx.triggered or not _can_edit(app_data["site"], app_data):
         return dash.no_update
-    site, pl = state["site"], state["pl"]
+    site, pl = app_data["site"], app_data["pl"]
+    patch = Patch()
     for trigger in ctx.triggered:
-        prop_id = trigger["prop_id"]
         # Parse pattern-matching id: {"type":"row-input","row":"mon_frc","col":"inbound"}.value
-        id_dict = json.loads(prop_id.split(".")[0])
+        id_dict = json.loads(trigger["prop_id"].split(".")[0])
         row_id, col_id = id_dict["row"], id_dict["col"]
         val = trigger["value"]
-        state["values"][site][pl][row_id][col_id] = str(val) if val is not None else ""
-    return _form_part(state)
+        patch["values"][site][pl][row_id][col_id] = str(val) if val is not None else ""
+    return patch
 
 
 # ── Friday FRC input callback ─────────────────────────────────────────────────
@@ -641,10 +649,14 @@ def update_fri_values(fri_vals, fri_presets, fri_others,
                       act_inputs, act_presets, act_others,
                       thu_inputs, thu_presets, thu_others,
                       app_data: dict, form_data: dict):
-    state = _merge(app_data, form_data)
-    if not ctx.triggered or not _can_edit(state["site"], state):
+    # Patch is essential here: with rapid input changes on multiple cells,
+    # returning the whole form-values dict caused concurrent responses to
+    # overwrite each other (only the last typed cell survived). A Patch
+    # touches just the specific path, so cell-level updates never collide.
+    if not ctx.triggered or not _can_edit(app_data["site"], app_data):
         return dash.no_update
-    site, pl = state["site"], state["pl"]
+    site, pl = app_data["site"], app_data["pl"]
+    patch = Patch()
 
     for trigger in ctx.triggered:
         id_dict = json.loads(trigger["prop_id"].split(".")[0])
@@ -653,31 +665,31 @@ def update_fri_values(fri_vals, fri_presets, fri_others,
         val     = trigger["value"]
 
         if t == "fri-input":
-            state["values"][site][pl]["fri_frc"][col_id] = str(val) if val is not None else ""
+            patch["values"][site][pl]["fri_frc"][col_id] = str(val) if val is not None else ""
         elif t == "fri-presets":
-            state["fri_comments"][site][pl][col_id]["presets"] = val or []
+            patch["fri_comments"][site][pl][col_id]["presets"] = val or []
         elif t == "fri-others":
-            state["fri_comments"][site][pl][col_id]["others"] = val or ""
+            patch["fri_comments"][site][pl][col_id]["others"] = val or ""
         elif t == "wip-ot-input":
-            state["values"][site][pl]["wip_ot"][col_id] = str(val) if val is not None else ""
+            patch["values"][site][pl]["wip_ot"][col_id] = str(val) if val is not None else ""
         elif t == "wip-ot-presets":
-            state["wip_ot_comments"][site][pl][col_id]["presets"] = val or []
+            patch["wip_ot_comments"][site][pl][col_id]["presets"] = val or []
         elif t == "wip-ot-others":
-            state["wip_ot_comments"][site][pl][col_id]["others"] = val or ""
+            patch["wip_ot_comments"][site][pl][col_id]["others"] = val or ""
         elif t == "actual-input":
-            state["values"][site][pl]["actual"][col_id] = str(val) if val is not None else ""
+            patch["values"][site][pl]["actual"][col_id] = str(val) if val is not None else ""
         elif t == "actual-presets":
-            state["actual_comments"][site][pl][col_id]["presets"] = val or []
+            patch["actual_comments"][site][pl][col_id]["presets"] = val or []
         elif t == "actual-others":
-            state["actual_comments"][site][pl][col_id]["others"] = val or ""
+            patch["actual_comments"][site][pl][col_id]["others"] = val or ""
         elif t == "thu-input":
-            state["values"][site][pl]["thu_frc"][col_id] = str(val) if val is not None else ""
+            patch["values"][site][pl]["thu_frc"][col_id] = str(val) if val is not None else ""
         elif t == "thu-presets":
-            state["thu_comments"][site][pl][col_id]["presets"] = val or []
+            patch["thu_comments"][site][pl][col_id]["presets"] = val or []
         elif t == "thu-others":
-            state["thu_comments"][site][pl][col_id]["others"] = val or ""
+            patch["thu_comments"][site][pl][col_id]["others"] = val or ""
 
-    return _form_part(state)
+    return patch
 
 
 # ── Friday FRC zero-flag callback ─────────────────────────────────────────────
@@ -693,11 +705,13 @@ def update_fri_values(fri_vals, fri_presets, fri_others,
     prevent_initial_call=True,
 )
 def update_fri_zero(fri_zeros, app_data: dict, form_data: dict):
-    state = _merge(app_data, form_data)
-    if not ctx.triggered or not _can_edit(state["site"], state):
+    if not ctx.triggered or not _can_edit(app_data["site"], app_data):
         return dash.no_update, dash.no_update
-    site, pl = state["site"], state["pl"]
-    changed = False
+    site, pl = app_data["site"], app_data["pl"]
+    app_patch  = Patch()
+    form_patch = Patch()
+    app_changed  = False
+    form_changed = False
 
     for trigger in ctx.triggered:
         id_dict = json.loads(trigger["prop_id"].split(".")[0])
@@ -705,15 +719,18 @@ def update_fri_zero(fri_zeros, app_data: dict, form_data: dict):
             continue
         col_id  = id_dict["col"]
         is_zero = bool(trigger["value"])
-        if state["zero_flags"][site][pl]["fri_frc"].get(col_id, False) != is_zero:
-            state["zero_flags"][site][pl]["fri_frc"][col_id] = is_zero
+        current = (app_data.get("zero_flags", {}).get(site, {}).get(pl, {})
+                   .get("fri_frc", {}).get(col_id, False))
+        if current != is_zero:
+            app_patch["zero_flags"][site][pl]["fri_frc"][col_id] = is_zero
+            app_changed = True
             if is_zero:
-                state["values"][site][pl]["fri_frc"][col_id] = "0"
-            changed = True
+                form_patch["values"][site][pl]["fri_frc"][col_id] = "0"
+                form_changed = True
 
-    if not changed:
+    if not app_changed:
         return dash.no_update, dash.no_update
-    return _app_part(state), _form_part(state)
+    return app_patch, form_patch if form_changed else dash.no_update
 
 
 # ── WIP OT zero-flag callback ─────────────────────────────────────────────────
@@ -728,11 +745,13 @@ def update_fri_zero(fri_zeros, app_data: dict, form_data: dict):
     prevent_initial_call=True,
 )
 def update_wip_ot_zero(wip_zeros, app_data: dict, form_data: dict):
-    state = _merge(app_data, form_data)
-    if not ctx.triggered or not _can_edit(state["site"], state):
+    if not ctx.triggered or not _can_edit(app_data["site"], app_data):
         return dash.no_update, dash.no_update
-    site, pl = state["site"], state["pl"]
-    changed = False
+    site, pl = app_data["site"], app_data["pl"]
+    app_patch  = Patch()
+    form_patch = Patch()
+    app_changed  = False
+    form_changed = False
 
     for trigger in ctx.triggered:
         id_dict = json.loads(trigger["prop_id"].split(".")[0])
@@ -740,15 +759,18 @@ def update_wip_ot_zero(wip_zeros, app_data: dict, form_data: dict):
             continue
         col_id  = id_dict["col"]
         is_zero = bool(trigger["value"])
-        if state["zero_flags"][site][pl]["wip_ot"].get(col_id, False) != is_zero:
-            state["zero_flags"][site][pl]["wip_ot"][col_id] = is_zero
+        current = (app_data.get("zero_flags", {}).get(site, {}).get(pl, {})
+                   .get("wip_ot", {}).get(col_id, False))
+        if current != is_zero:
+            app_patch["zero_flags"][site][pl]["wip_ot"][col_id] = is_zero
+            app_changed = True
             if is_zero:
-                state["values"][site][pl]["wip_ot"][col_id] = "0"
-            changed = True
+                form_patch["values"][site][pl]["wip_ot"][col_id] = "0"
+                form_changed = True
 
-    if not changed:
+    if not app_changed:
         return dash.no_update, dash.no_update
-    return _app_part(state), _form_part(state)
+    return app_patch, form_patch if form_changed else dash.no_update
 
 
 # ── Actual zero-flag callback ─────────────────────────────────────────────────
@@ -763,11 +785,13 @@ def update_wip_ot_zero(wip_zeros, app_data: dict, form_data: dict):
     prevent_initial_call=True,
 )
 def update_actual_zero(actual_zeros, app_data: dict, form_data: dict):
-    state = _merge(app_data, form_data)
-    if not ctx.triggered or not _can_edit(state["site"], state):
+    if not ctx.triggered or not _can_edit(app_data["site"], app_data):
         return dash.no_update, dash.no_update
-    site, pl = state["site"], state["pl"]
-    changed = False
+    site, pl = app_data["site"], app_data["pl"]
+    app_patch  = Patch()
+    form_patch = Patch()
+    app_changed  = False
+    form_changed = False
 
     for trigger in ctx.triggered:
         id_dict = json.loads(trigger["prop_id"].split(".")[0])
@@ -775,15 +799,18 @@ def update_actual_zero(actual_zeros, app_data: dict, form_data: dict):
             continue
         col_id  = id_dict["col"]
         is_zero = bool(trigger["value"])
-        if state["zero_flags"][site][pl]["actual"].get(col_id, False) != is_zero:
-            state["zero_flags"][site][pl]["actual"][col_id] = is_zero
+        current = (app_data.get("zero_flags", {}).get(site, {}).get(pl, {})
+                   .get("actual", {}).get(col_id, False))
+        if current != is_zero:
+            app_patch["zero_flags"][site][pl]["actual"][col_id] = is_zero
+            app_changed = True
             if is_zero:
-                state["values"][site][pl]["actual"][col_id] = "0"
-            changed = True
+                form_patch["values"][site][pl]["actual"][col_id] = "0"
+                form_changed = True
 
-    if not changed:
+    if not app_changed:
         return dash.no_update, dash.no_update
-    return _app_part(state), _form_part(state)
+    return app_patch, form_patch if form_changed else dash.no_update
 
 
 # ── Thursday FRC zero-flag callback ───────────────────────────────────────────
@@ -797,11 +824,13 @@ def update_actual_zero(actual_zeros, app_data: dict, form_data: dict):
     prevent_initial_call=True,
 )
 def update_thu_zero(thu_zeros, app_data: dict, form_data: dict):
-    state = _merge(app_data, form_data)
-    if not ctx.triggered or not _can_edit(state["site"], state):
+    if not ctx.triggered or not _can_edit(app_data["site"], app_data):
         return dash.no_update, dash.no_update
-    site, pl = state["site"], state["pl"]
-    changed = False
+    site, pl = app_data["site"], app_data["pl"]
+    app_patch  = Patch()
+    form_patch = Patch()
+    app_changed  = False
+    form_changed = False
 
     for trigger in ctx.triggered:
         id_dict = json.loads(trigger["prop_id"].split(".")[0])
@@ -809,15 +838,18 @@ def update_thu_zero(thu_zeros, app_data: dict, form_data: dict):
             continue
         col_id  = id_dict["col"]
         is_zero = bool(trigger["value"])
-        if state["zero_flags"][site][pl]["thu_frc"].get(col_id, False) != is_zero:
-            state["zero_flags"][site][pl]["thu_frc"][col_id] = is_zero
+        current = (app_data.get("zero_flags", {}).get(site, {}).get(pl, {})
+                   .get("thu_frc", {}).get(col_id, False))
+        if current != is_zero:
+            app_patch["zero_flags"][site][pl]["thu_frc"][col_id] = is_zero
+            app_changed = True
             if is_zero:
-                state["values"][site][pl]["thu_frc"][col_id] = "0"
-            changed = True
+                form_patch["values"][site][pl]["thu_frc"][col_id] = "0"
+                form_changed = True
 
-    if not changed:
+    if not app_changed:
         return dash.no_update, dash.no_update
-    return _app_part(state), _form_part(state)
+    return app_patch, form_patch if form_changed else dash.no_update
 
 
 # ── Friday panel toggle ───────────────────────────────────────────────────────
