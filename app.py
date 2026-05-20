@@ -28,15 +28,23 @@ from data.schema import (
 )
 
 # ── App init ──────────────────────────────────────────────────────────────────
+EXTERNAL_STYLESHEETS = [
+    {
+        "href": (
+            "https://fonts.googleapis.com/css2?"
+            "family=IBM+Plex+Mono:wght@400;500;600"
+            "&family=DM+Sans:wght@300;400;500;600"
+            "&display=swap"
+        ),
+        "rel": "stylesheet",
+    }
+]
 
 app = dash.Dash(
     __name__,
     title="Volumes Data Entry Tool",
-    external_stylesheets=[
-        "https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600"
-        "&family=DM+Sans:wght@300;400;500;600&display=swap"
-    ],
-    suppress_callback_exceptions=True,
+    external_stylesheets=EXTERNAL_STYLESHEETS,
+    suppress_callback_exceptions=True
 )
 
 # WSGI entry point for gunicorn on Databricks Apps (`app:server` in app.yaml)
