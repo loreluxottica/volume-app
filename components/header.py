@@ -130,6 +130,13 @@ def render_app_header(
                     className="action-btn btn-save-all",
                     n_clicks=0,
                 ),
+                html.Button(
+                    ["⚠ ", "Double Tap ", "🥤"],
+                    id="btn-refresh-cache",
+                    className="action-btn btn-danger",
+                    title="Refresh the server cache. Tap twice — gunicorn runs 2 workers.",
+                    n_clicks=0,
+                ),
             ],
         ),
     ])

@@ -1678,6 +1678,32 @@ def export_csv(n, state: dict):
     return dcc.send_data_frame(df.to_csv, fname, index=False), f"⤓ Exported {fname}"
 
 
+# ── Double Tap — refresh server cache ─────────────────────────────────────────
+# Server cache (data/cache.py) is per-process; gunicorn runs 2 workers, so each
+# click only clears the worker that serves the request. Tap twice for full effect.
+
+@app.callback(
+    Output("app-state",   "data", allow_duplicate=True),
+    Output("form-values", "data", allow_duplicate=True),
+    Output("toast-store", "data", allow_duplicate=True),
+    Input("btn-refresh-cache", "n_clicks"),
+    State("app-state", "data"),
+    State("form-values", "data"),
+    prevent_initial_call=True,
+)
+def refresh_cache(n, app_data: dict, form_data: dict):
+    if not n:
+        return dash.no_update, dash.no_update, dash.no_update
+    state = _merge(app_data, form_data)
+    cache.invalidate_all()
+    state["loaded"] = []
+    state["global_loaded"] = []
+    ok = _load_for_view(state, state["site"], state["pl"])
+    msg = ("🥤 Cache refreshed — tap again to cover the other worker"
+           if ok else "⚠ Refresh failed — check DB connection")
+    return _app_part(state), _form_part(state), msg
+
+
 # ── Toast clientside callback ─────────────────────────────────────────────────
 # Injects toast DOM element when toast-store updates — pure JS, no round trip.
 

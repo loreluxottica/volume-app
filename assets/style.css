@@ -281,6 +281,8 @@ body {
 .btn-fri:hover, .btn-fri-open { background: var(--blue-bg); }
 .btn-save-all  { border-color: var(--border-strong); color: var(--text-2); background: var(--surface); }
 .btn-save-all:hover { background: var(--surface2); }
+.btn-danger    { border-color: var(--red-border); color: #b3261e; background: var(--red-bg); font-weight: 600; }
+.btn-danger:hover { background: #fbe3e0; }
 .btn-submit-all { border-color: var(--green); color: var(--green); background: var(--green-bg); }
 .btn-submit-all:hover { background: var(--green-hover); }
 
