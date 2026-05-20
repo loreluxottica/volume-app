@@ -134,7 +134,7 @@ def render_app_header(
                     ["⚠ ", "Double Tap ", "🥤"],
                     id="btn-refresh-cache",
                     className="action-btn btn-danger",
-                    title="Refresh the server cache. Tap twice — gunicorn runs 2 workers.",
+                    title="Refresh the server cache (clears cache.py memo).",
                     n_clicks=0,
                 ),
             ],

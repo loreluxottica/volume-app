@@ -5,5 +5,9 @@
 import os
 
 bind = f"0.0.0.0:{os.environ.get('DATABRICKS_APP_PORT', '8000')}"
-workers = 2
+# Single worker on purpose: Dash callbacks here return whole dcc.Store
+# snapshots, so concurrent workers can race and overwrite each other's
+# updates (lost cell values, spurious tab switches). Load is tiny — one
+# worker is enough.
+workers = 1
 timeout = 120

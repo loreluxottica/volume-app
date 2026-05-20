@@ -1699,8 +1699,7 @@ def refresh_cache(n, app_data: dict, form_data: dict):
     state["loaded"] = []
     state["global_loaded"] = []
     ok = _load_for_view(state, state["site"], state["pl"])
-    msg = ("🥤 Cache refreshed — tap again to cover the other worker"
-           if ok else "⚠ Refresh failed — check DB connection")
+    msg = "🥤 Cache refreshed" if ok else "⚠ Refresh failed — check DB connection"
     return _app_part(state), _form_part(state), msg
 
 
