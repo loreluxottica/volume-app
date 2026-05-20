@@ -593,40 +593,85 @@ def switch_pl(n_frames, n_wear, app_data: dict, form_data: dict):
             "" if ok else "⚠ Could not load data.")
 
 
-# ── Row-level input callback ──────────────────────────────────────────────────
+# ── Row-level input callback (CLIENTSIDE) ─────────────────────────────────────
+# Same rationale as the panel callback below: writes the typed value into
+# `form-values` synchronously in the browser, so a subsequent Save/Submit click
+# always sees the latest values. Covers every standard row (mon_frc, thu_frc
+# inline cells if any, py, siop, eow_wip) for both Frames and Wearables.
 
-# Writes typed values into `form-values` only — no re-render, so typing is
-# never interrupted by an input remount.
-
-@app.callback(
+app.clientside_callback(
+    """
+    function(values, app_data, form_data) {
+        if (!app_data || !form_data) return window.dash_clientside.no_update;
+        var trig = window.dash_clientside.callback_context.triggered;
+        if (!trig || trig.length === 0) return window.dash_clientside.no_update;
+        var site = app_data.site, pl = app_data.pl;
+        if (!site || !pl) return window.dash_clientside.no_update;
+        var nf = JSON.parse(JSON.stringify(form_data));
+        for (var i = 0; i < trig.length; i++) {
+            var pid = trig[i].prop_id;
+            var idStr = pid.substring(0, pid.lastIndexOf('.'));
+            var idObj;
+            try { idObj = JSON.parse(idStr); } catch (e) { continue; }
+            var row_id = idObj.row, cid = idObj.col;
+            var v = trig[i].value;
+            var sv = (v === null || v === undefined) ? "" : String(v);
+            try { nf.values[site][pl][row_id][cid] = sv; } catch (e) { /* skip */ }
+        }
+        return nf;
+    }
+    """,
     Output("form-values", "data", allow_duplicate=True),
     Input({"type": "row-input", "row": ALL, "col": ALL}, "value"),
     State("app-state", "data"),
     State("form-values", "data"),
     prevent_initial_call=True,
 )
-def update_row_values(values, app_data: dict, form_data: dict):
-    # Patch keeps cell updates from racing — see update_fri_values for the
-    # full rationale.
-    if not ctx.triggered or not _can_edit(app_data["site"], app_data):
-        return dash.no_update
-    site, pl = app_data["site"], app_data["pl"]
-    patch = Patch()
-    for trigger in ctx.triggered:
-        # Parse pattern-matching id: {"type":"row-input","row":"mon_frc","col":"inbound"}.value
-        id_dict = json.loads(trigger["prop_id"].split(".")[0])
-        row_id, col_id = id_dict["row"], id_dict["col"]
-        val = trigger["value"]
-        patch["values"][site][pl][row_id][col_id] = str(val) if val is not None else ""
-    return patch
 
 
-# ── Friday FRC input callback ─────────────────────────────────────────────────
-# Friday values and comment text/presets go to `form-values` (no re-render).
-# The zero checkbox is handled separately (update_fri_zero) because it changes
-# the rendered input's disabled state and therefore does need a re-render.
+# ── Panel input callback (CLIENTSIDE) ─────────────────────────────────────────
+# Runs in the browser, synchronously: a blur on an input updates `form-values`
+# in-place BEFORE any subsequent click event (Save/Submit) is dispatched. This
+# eliminates the residual race where the click captured stale form-values State
+# because previous blurs' server round-trips had not yet returned. Covers all
+# four panel rows (Friday FRC, WIP OT %, Actual, Thursday FRC), both Frames
+# and Wearables — the (site, pl) dimensions are read from app-state.
 
-@app.callback(
+app.clientside_callback(
+    """
+    function(fri_vals, fri_presets, fri_others, wip_inputs, wip_presets, wip_others, act_inputs, act_presets, act_others, thu_inputs, thu_presets, thu_others, app_data, form_data) {
+        if (!app_data || !form_data) return window.dash_clientside.no_update;
+        var trig = window.dash_clientside.callback_context.triggered;
+        if (!trig || trig.length === 0) return window.dash_clientside.no_update;
+        var site = app_data.site, pl = app_data.pl;
+        if (!site || !pl) return window.dash_clientside.no_update;
+        var nf = JSON.parse(JSON.stringify(form_data));
+        for (var i = 0; i < trig.length; i++) {
+            var pid = trig[i].prop_id;
+            var idStr = pid.substring(0, pid.lastIndexOf('.'));
+            var idObj;
+            try { idObj = JSON.parse(idStr); } catch (e) { continue; }
+            var t = idObj.type, cid = idObj.col;
+            var v = trig[i].value;
+            var sv = (v === null || v === undefined) ? "" : String(v);
+            try {
+                if (t === "fri-input")           nf.values[site][pl].fri_frc[cid] = sv;
+                else if (t === "fri-presets")    nf.fri_comments[site][pl][cid].presets = v || [];
+                else if (t === "fri-others")     nf.fri_comments[site][pl][cid].others = v || "";
+                else if (t === "wip-ot-input")   nf.values[site][pl].wip_ot[cid] = sv;
+                else if (t === "wip-ot-presets") nf.wip_ot_comments[site][pl][cid].presets = v || [];
+                else if (t === "wip-ot-others")  nf.wip_ot_comments[site][pl][cid].others = v || "";
+                else if (t === "actual-input")   nf.values[site][pl].actual[cid] = sv;
+                else if (t === "actual-presets") nf.actual_comments[site][pl][cid].presets = v || [];
+                else if (t === "actual-others")  nf.actual_comments[site][pl][cid].others = v || "";
+                else if (t === "thu-input")      nf.values[site][pl].thu_frc[cid] = sv;
+                else if (t === "thu-presets")    nf.thu_comments[site][pl][cid].presets = v || [];
+                else if (t === "thu-others")     nf.thu_comments[site][pl][cid].others = v || "";
+            } catch (e) { /* nested path missing — skip */ }
+        }
+        return nf;
+    }
+    """,
     Output("form-values", "data", allow_duplicate=True),
     Input({"type": "fri-input",      "col": ALL}, "value"),
     Input({"type": "fri-presets",    "col": ALL}, "value"),
@@ -644,52 +689,6 @@ def update_row_values(values, app_data: dict, form_data: dict):
     State("form-values", "data"),
     prevent_initial_call=True,
 )
-def update_fri_values(fri_vals, fri_presets, fri_others,
-                      wip_inputs, wip_presets, wip_others,
-                      act_inputs, act_presets, act_others,
-                      thu_inputs, thu_presets, thu_others,
-                      app_data: dict, form_data: dict):
-    # Patch is essential here: with rapid input changes on multiple cells,
-    # returning the whole form-values dict caused concurrent responses to
-    # overwrite each other (only the last typed cell survived). A Patch
-    # touches just the specific path, so cell-level updates never collide.
-    if not ctx.triggered or not _can_edit(app_data["site"], app_data):
-        return dash.no_update
-    site, pl = app_data["site"], app_data["pl"]
-    patch = Patch()
-
-    for trigger in ctx.triggered:
-        id_dict = json.loads(trigger["prop_id"].split(".")[0])
-        t       = id_dict["type"]
-        col_id  = id_dict["col"]
-        val     = trigger["value"]
-
-        if t == "fri-input":
-            patch["values"][site][pl]["fri_frc"][col_id] = str(val) if val is not None else ""
-        elif t == "fri-presets":
-            patch["fri_comments"][site][pl][col_id]["presets"] = val or []
-        elif t == "fri-others":
-            patch["fri_comments"][site][pl][col_id]["others"] = val or ""
-        elif t == "wip-ot-input":
-            patch["values"][site][pl]["wip_ot"][col_id] = str(val) if val is not None else ""
-        elif t == "wip-ot-presets":
-            patch["wip_ot_comments"][site][pl][col_id]["presets"] = val or []
-        elif t == "wip-ot-others":
-            patch["wip_ot_comments"][site][pl][col_id]["others"] = val or ""
-        elif t == "actual-input":
-            patch["values"][site][pl]["actual"][col_id] = str(val) if val is not None else ""
-        elif t == "actual-presets":
-            patch["actual_comments"][site][pl][col_id]["presets"] = val or []
-        elif t == "actual-others":
-            patch["actual_comments"][site][pl][col_id]["others"] = val or ""
-        elif t == "thu-input":
-            patch["values"][site][pl]["thu_frc"][col_id] = str(val) if val is not None else ""
-        elif t == "thu-presets":
-            patch["thu_comments"][site][pl][col_id]["presets"] = val or []
-        elif t == "thu-others":
-            patch["thu_comments"][site][pl][col_id]["others"] = val or ""
-
-    return patch
 
 
 # ── Friday FRC zero-flag callback ─────────────────────────────────────────────
