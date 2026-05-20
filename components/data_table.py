@@ -145,7 +145,7 @@ def render_friday_panel(
                 value=fri_values.get(cid) or None,
                 disabled=zf,
                 className=input_cls,
-                debounce=False,
+                debounce=True,
             ),
             # Zero flag checkbox
             html.Div(className="zero-flag-row", children=[
@@ -294,7 +294,7 @@ def render_wip_ot_panel(
                 value=wip_ot_values.get(cid) or None,
                 disabled=zf,
                 className=input_cls,
-                debounce=False,
+                debounce=True,
             ),
             # Zero flag checkbox
             html.Div(className="zero-flag-row", children=[
@@ -449,7 +449,7 @@ def render_actual_panel(
                 value=actual_values.get(cid) or None,
                 disabled=zf,
                 className=input_cls,
-                debounce=False,
+                debounce=True,
             ),
             # Zero flag checkbox
             html.Div(className="zero-flag-row", children=[
@@ -604,7 +604,7 @@ def render_thu_panel(
                 value=thu_values.get(cid) or None,
                 disabled=zf,
                 className=input_cls,
-                debounce=False,
+                debounce=True,
             ),
             # Zero flag checkbox
             html.Div(className="zero-flag-row", children=[
