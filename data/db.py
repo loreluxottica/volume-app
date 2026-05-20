@@ -84,6 +84,9 @@ def _get_conn() -> sql.client.Connection:
             server_hostname=_server_hostname(cfg),
             http_path=_http_path(),
             credentials_provider=lambda: cfg.authenticate,
+            _timeout=30,          # secondi, solleva prima
+            _retry_delay=2,
+            _retry_stop_after_attempts_count=3,
         )
     return _conn
 
@@ -233,7 +236,7 @@ def submit_row(
 ) -> None:
     now = datetime.now(timezone.utc)
 
-    # Build the rows for ALL channels first.
+    # 1. Costruiamo i dati della sorgente
     rows_to_insert = []
     for channel, value in values.items():
         if value is None and not zero_flags.get(channel):
@@ -241,50 +244,75 @@ def submit_row(
         comment_data = (comments or {}).get(channel, {})
         presets = ",".join(comment_data.get("presets", []))
         others = comment_data.get("others", "") or ""
+        
+        # Generiamo un ID univoco per la nuova riga
+        new_uuid = str(uuid.uuid4())
+        
+        # Per la tecnica SCD Tipo 2 nel MERGE, passiamo due righe per canale nella sorgente:
+        # Riga A: Serve a fare MATCH con il record attuale per metterlo a FALSE
         rows_to_insert.append((
-            str(uuid.uuid4()), now, week_id, site, product_line,
+            new_uuid, now, week_id, site, product_line,
             user_id, submission_type, channel, value,
-            zero_flags.get(channel, False),
-            presets, others,
+            zero_flags.get(channel, False), presets, others,
+            True # merge_key: True indica che questa riga serve solo a scatenare il MATCH sull'esistente
+        ))
+        # Riga B: Non farà MATCH (merge_key = False) e verrà inserita come NUOVO record ufficiale
+        rows_to_insert.append((
+            new_uuid, now, week_id, site, product_line,
+            user_id, submission_type, channel, value,
+            zero_flags.get(channel, False), presets, others,
+            False # merge_key: False garantisce che vada in NOT MATCHED e venga inserita
         ))
 
     if not rows_to_insert:
         return
 
-    # Step 1: INSERT the new official rows FIRST. If this fails, the previous
-    # official rows are left untouched — a read still resolves correctly.
-    placeholders = ", ".join(
-        ["(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE, ?, ?, FALSE, NULL)"] * len(rows_to_insert)
-    )
+    # 13 colonne per riga (le 12 standard + merge_key)
+    placeholders = ", ".join(["(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"] * len(rows_to_insert))
     params = [p for row in rows_to_insert for p in row]
 
+    # 2. Eseguiamo il MERGE atomico
     _run(
         f"""
-        INSERT INTO {_T_SUBMISSIONS}
-          (submission_id, timestamp, week_id, site, product_line,
-           user_id, submission_type, channel, value_kpcs,
-           is_zero_flagged, official_log,
-           comment_preset, comment_other, is_amendment, ref_submission_id)
-        VALUES {placeholders}
+        MERGE INTO {_T_SUBMISSIONS} AS t
+        USING (
+            VALUES {placeholders}
+        ) AS s(
+            submission_id, timestamp, week_id, site, product_line,
+            user_id, submission_type, channel, value_kpcs,
+            is_zero_flagged, comment_preset, comment_other, merge_key
+        )
+        -- Il MATCH avviene solo se la riga esistente è quella ufficiale E se la riga sorgente ha merge_key = True
+        ON t.week_id = s.week_id
+           AND t.site = s.site
+           AND t.product_line = s.product_line
+           AND t.submission_type = s.submission_type
+           AND t.channel = s.channel
+           AND t.official_log = TRUE
+           AND s.merge_key = TRUE
+        
+        -- Se c'è match (ed è la riga con merge_key = True), "disattiviamo" il vecchio record
+        WHEN MATCHED THEN
+            UPDATE SET 
+                t.official_log = FALSE
+                
+        -- Se NON c'è match (perché la riga esistente non è official, o perché la sorgente ha merge_key = False)
+        -- inseriamo la nuova riga ufficiale. Filtriamo per inserire solo la riga pulita (merge_key = False).
+        WHEN NOT MATCHED AND s.merge_key = FALSE THEN
+            INSERT (
+                submission_id, timestamp, week_id, site, product_line,
+                user_id, submission_type, channel, value_kpcs,
+                is_zero_flagged, official_log, comment_preset, comment_other,
+                is_amendment, ref_submission_id
+            )
+            VALUES (
+                s.submission_id, s.timestamp, s.week_id, s.site, s.product_line,
+                s.user_id, s.submission_type, s.channel, s.value_kpcs,
+                s.is_zero_flagged, TRUE, s.comment_preset, s.comment_other,
+                FALSE, NULL
+            )
         """,
         params,
-    )
-
-    # Step 2: demote the previous official rows. `timestamp < ?` keeps the rows
-    # just inserted (timestamp = now) as the only official ones — so even if
-    # this UPDATE fails, no key is ever left with zero official_log = TRUE rows.
-    _run(
-        f"""
-        UPDATE {_T_SUBMISSIONS}
-        SET official_log = FALSE
-        WHERE week_id = ?
-          AND site = ?
-          AND product_line = ?
-          AND submission_type = ?
-          AND official_log = TRUE
-          AND timestamp < ?
-        """,
-        [week_id, site, product_line, submission_type, now],
     )
 
 
@@ -340,17 +368,7 @@ def save_draft(
 ) -> None:
     now = datetime.now(timezone.utc)
 
-    # Delete existing draft (single round-trip)
-    _run(
-        f"""
-        DELETE FROM {_T_DRAFTS}
-        WHERE week_id = ? AND site = ? AND product_line = ?
-          AND submission_type = ? AND user_id = ?
-        """,
-        [week_id, site, product_line, submission_type, user_id],
-    )
-
-    # Batch INSERT all channels (single round-trip)
+    # Costruiamo le righe per tutti i canali forniti
     rows_to_insert = []
     for channel, value in values.items():
         comment_data = (comments or {}).get(channel, {})
@@ -366,22 +384,40 @@ def save_draft(
     if not rows_to_insert:
         return
 
-    placeholders = ", ".join(
-        ["(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"] * len(rows_to_insert)
-    )
+    # Generiamo i segnaposto per la clausola VALUES (es: "(?, ?, ...), (?, ?, ...)")
+    # Ogni riga ha 12 colonne
+    placeholders = ", ".join(["(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"] * len(rows_to_insert))
     params = [p for row in rows_to_insert for p in row]
 
+    # Eseguiamo il MERGE in un'unica transazione atomica
     _run(
         f"""
-        INSERT INTO {_T_DRAFTS}
-          (draft_id, saved_at, week_id, site, product_line,
-           user_id, submission_type, channel, value_kpcs,
-           is_zero_flagged, comment_preset, comment_other)
-        VALUES {placeholders}
+        MERGE INTO {_T_DRAFTS} AS t
+        USING (
+            VALUES {placeholders}
+        ) AS s(
+            draft_id, saved_at, week_id, site, product_line, 
+            user_id, submission_type, channel, value_kpcs, 
+            is_zero_flagged, comment_preset, comment_other
+        )
+        ON t.week_id = s.week_id 
+           AND t.site = s.site 
+           AND t.product_line = s.product_line   
+           AND t.submission_type = s.submission_type   
+           AND t.user_id = s.user_id   
+           AND t.channel = s.channel
+        WHEN MATCHED THEN 
+            UPDATE SET 
+                t.saved_at = s.saved_at,
+                t.value_kpcs = s.value_kpcs,
+                t.is_zero_flagged = s.is_zero_flagged,
+                t.comment_preset = s.comment_preset,
+                t.comment_other = s.comment_other
+        WHEN NOT MATCHED THEN 
+            INSERT *
         """,
         params,
     )
-
 
 def delete_draft(week_id: int, site: str, product_line: str,
                  submission_type: str, user_id: str) -> None:

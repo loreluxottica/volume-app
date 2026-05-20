@@ -10,6 +10,8 @@
 from __future__ import annotations
 
 import threading
+import time
+from time import monotonic
 from typing import Any
 
 import pandas as pd
@@ -103,3 +105,10 @@ def invalidate_all() -> None:
         _gli_cache.clear()
         _current_week = None
         _access = None
+
+
+_CACHE_TTL = 300  # secondi
+
+def _is_stale(key, cache_ts: dict) -> bool:
+    t = cache_ts.get(key)
+    return t is None or (time.monotonic() - t) > _CACHE_TTL
