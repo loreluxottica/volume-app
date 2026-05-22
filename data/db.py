@@ -10,12 +10,13 @@
 #   app_access    — per-user site access ('*' = every site / admin)
 #
 # Connection is established lazily on first query and reused across requests.
-# Auth: Databricks Apps injects a full PostgreSQL connection URL (with
-# credentials) into DATABASE_URL via the "database" lakebase resource.
+# Auth: Databricks Apps injects M2M OAuth automatically; Config().token gives
+# the current token, which is used as the PostgreSQL password.
 #
-# Required env vars (set by app.yaml resource binding):
-#   DATABASE_URL    — full PostgreSQL URL injected by the Lakebase resource
-#   LAKEBASE_SCHEMA — schema holding the tables (default: "volume_data_entry")
+# Required env vars:
+#   DATABRICKS_LAKEBASE_URL — base PostgreSQL URL without password, e.g.:
+#     postgresql://token@ep-xxx.database.westeurope.azuredatabricks.net/databricks_postgres?sslmode=require
+#   LAKEBASE_SCHEMA         — schema holding the tables (default: "volume_data_entry")
 # ─────────────────────────────────────────────────────────────────────────────
 
 from __future__ import annotations
@@ -24,9 +25,11 @@ import os
 import uuid
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import urlparse, urlunparse, quote_plus
 
 import pandas as pd
 import psycopg2
+from databricks.sdk.core import Config
 
 # ── Table names ───────────────────────────────────────────────────────────────
 
@@ -52,12 +55,32 @@ VOLUME_PATH = "/Volumes/sbx-logistics/volume-data-entry-app/app_volume"
 # ── Connection ────────────────────────────────────────────────────────────────
 
 _conn: psycopg2.extensions.connection | None = None
+_cfg: Config | None = None
+
+
+def _config() -> Config:
+    global _cfg
+    if _cfg is None:
+        _cfg = Config()
+    return _cfg
+
+
+def _build_conn_url() -> str:
+    """Inject the Databricks OAuth/M2M token as the PostgreSQL password."""
+    base  = os.environ["DATABRICKS_LAKEBASE_URL"].strip()
+    token = _config().token
+    parsed = urlparse(base)
+    userinfo = parsed.username or "token"
+    netloc = f"{userinfo}:{quote_plus(token)}@{parsed.hostname}"
+    if parsed.port:
+        netloc += f":{parsed.port}"
+    return urlunparse(parsed._replace(netloc=netloc))
 
 
 def _get_conn() -> psycopg2.extensions.connection:
     global _conn
     if _conn is None:
-        _conn = psycopg2.connect(os.environ["DATABASE_URL"])
+        _conn = psycopg2.connect(_build_conn_url())
         _conn.autocommit = True
     return _conn
 

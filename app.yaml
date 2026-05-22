@@ -1,5 +1,6 @@
-# Databricks App command. The Lakebase resource (key: "database") injects the
-# PostgreSQL connection URL with credentials into DATABASE_URL automatically.
+# Databricks App command.
+# DATABRICKS_LAKEBASE_URL: base PostgreSQL URL (no password); db.py injects
+# the M2M OAuth token from databricks.sdk.Config at connection time.
 command:
   - gunicorn
   - "app:server"
@@ -7,7 +8,7 @@ command:
   - gunicorn.conf.py
 
 env:
-  - name: DATABASE_URL
-    valueFrom: database
+  - name: DATABRICKS_LAKEBASE_URL
+    value: "postgresql://token@ep-empty-mode-e2j49wxy.database.westeurope.azuredatabricks.net/databricks_postgres?sslmode=require"
   - name: LAKEBASE_SCHEMA
     value: volume_data_entry
