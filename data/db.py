@@ -68,30 +68,29 @@ def _config() -> Config:
 def _get_token() -> str:
     """Return the current OAuth/PAT token regardless of auth method."""
     cfg = _config()
-    # Config.token is only set for PAT; for M2M OAuth use the credentials provider.
     if cfg.token:
         return cfg.token
-    headers = cfg.authenticate()
-    bearer = headers.get("Authorization", "")
-    return bearer.removeprefix("Bearer ").strip()
+    # Assign before calling to avoid property-vs-method ambiguity across SDK versions.
+    header_factory = cfg.authenticate
+    headers = header_factory()
+    return headers.get("Authorization", "").removeprefix("Bearer ").strip()
 
 
 def _build_conn_url() -> str:
-    """Build the PostgreSQL connection URL with credentials injected at runtime.
-
-    Username: SP client_id from SDK (M2M OAuth in Apps) or URL username (local).
-    Password: Bearer token from SDK authenticate().
-    This way the DATABRICKS_LAKEBASE_URL env var only needs host+db+sslmode.
-    """
-    base   = os.environ["DATABRICKS_LAKEBASE_URL"].strip()
-    cfg    = _config()
-    token  = _get_token()
-    parsed = urlparse(base)
-    username = cfg.client_id or parsed.username or "token"
-    netloc = f"{username}:{quote_plus(token)}@{parsed.hostname}"
-    if parsed.port:
-        netloc += f":{parsed.port}"
-    return urlunparse(parsed._replace(netloc=netloc))
+    """Build the PostgreSQL connection URL with credentials injected at runtime."""
+    try:
+        base     = os.environ["DATABRICKS_LAKEBASE_URL"].strip()
+        cfg      = _config()
+        token    = _get_token()
+        parsed   = urlparse(base)
+        username = cfg.client_id or parsed.username or "token"
+        netloc   = f"{username}:{quote_plus(token)}@{parsed.hostname}"
+        if parsed.port:
+            netloc += f":{parsed.port}"
+        return urlunparse(parsed._replace(netloc=netloc))
+    except Exception as exc:
+        print(f"[error] _build_conn_url failed: {exc}")
+        raise
 
 
 def _get_conn() -> psycopg2.extensions.connection:
