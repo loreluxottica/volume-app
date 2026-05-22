@@ -77,12 +77,18 @@ def _get_token() -> str:
 
 
 def _build_conn_url() -> str:
-    """Inject the Databricks OAuth/M2M token as the PostgreSQL password."""
+    """Build the PostgreSQL connection URL with credentials injected at runtime.
+
+    Username: SP client_id from SDK (M2M OAuth in Apps) or URL username (local).
+    Password: Bearer token from SDK authenticate().
+    This way the DATABRICKS_LAKEBASE_URL env var only needs host+db+sslmode.
+    """
     base   = os.environ["DATABRICKS_LAKEBASE_URL"].strip()
+    cfg    = _config()
     token  = _get_token()
     parsed = urlparse(base)
-    userinfo = parsed.username or "token"
-    netloc = f"{userinfo}:{quote_plus(token)}@{parsed.hostname}"
+    username = cfg.client_id or parsed.username or "token"
+    netloc = f"{username}:{quote_plus(token)}@{parsed.hostname}"
     if parsed.port:
         netloc += f":{parsed.port}"
     return urlunparse(parsed._replace(netloc=netloc))
