@@ -1,14 +1,5 @@
-# Databricks App command.
-# DATABRICKS_LAKEBASE_URL: base PostgreSQL URL (no password); db.py injects
-# the M2M OAuth token from databricks.sdk.Config at connection time.
 command:
   - gunicorn
   - "app:server"
   - -c
   - gunicorn.conf.py
-
-env:
-  - name: DATABRICKS_LAKEBASE_URL
-    value: "postgresql://token@ep-empty-mode-e2j49wxy.database.westeurope.azuredatabricks.net/databricks_postgres?sslmode=require"
-  - name: LAKEBASE_SCHEMA
-    value: volume_data_entry
