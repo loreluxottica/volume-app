@@ -1,24 +1,21 @@
 # data/db.py
 # ─────────────────────────────────────────────────────────────────────────────
-# Database layer: reads from and writes to Delta Lake tables via the
-# Databricks SQL connector.  All SQL is isolated here — no other module
-# touches the DB directly.
+# Database layer: reads from and writes to tables via the Lakebase PostgreSQL
+# endpoint. All SQL is isolated here — no other module touches the DB directly.
 #
-# Unity Catalog location: `sbx-logistics`.`volume-data-entry-app`
+# Lakebase database: databricks_postgres, schema: volume_data_entry
 #   weeks         — open/closed week management
 #   submissions   — user-entered data (append-only, audit trail)
 #   drafts        — drafts saved before submit (overwritten on each Save)
 #   app_access    — per-user site access ('*' = every site / admin)
-# Volume: /Volumes/sbx-logistics/volume-data-entry-app/app_volume
-#         — file storage (exports, uploads, ...)
 #
 # Connection is established lazily on first query and reused across requests.
-# Auth is resolved by databricks.sdk.Config from the environment:
-#   - locally:  DATABRICKS_HOST + DATABRICKS_TOKEN (a personal access token)
-#   - in-app:   DATABRICKS_HOST + DATABRICKS_CLIENT_ID/DATABRICKS_CLIENT_SECRET
-#               (OAuth M2M for the app service principal — injected by
-#               Databricks Apps; no PAT is provided in that environment)
-# DATABRICKS_HTTP_PATH must be set in either case (see app.yaml for the app).
+# Auth: Databricks Apps injects a full PostgreSQL connection URL (with
+# credentials) into DATABASE_URL via the "database" lakebase resource.
+#
+# Required env vars (set by app.yaml resource binding):
+#   DATABASE_URL    — full PostgreSQL URL injected by the Lakebase resource
+#   LAKEBASE_SCHEMA — schema holding the tables (default: "volume_data_entry")
 # ─────────────────────────────────────────────────────────────────────────────
 
 from __future__ import annotations
@@ -29,70 +26,43 @@ from datetime import datetime, timezone
 from typing import Any
 
 import pandas as pd
-from databricks import sql
-from databricks.sdk.core import Config
+import psycopg2
 
-# ── Unity Catalog location ────────────────────────────────────────────────────
-# Catalog and schema names contain hyphens, so they must be backtick-quoted
-# in SQL. Table names are built from these constants — never hardcode them.
+# ── Table names ───────────────────────────────────────────────────────────────
 
-_CATALOG = "`sbx-logistics`"
-_SCHEMA  = "`volume-data-entry-app`"
+_table_prefix: str | None = None
 
-_T_WEEKS       = f"{_CATALOG}.{_SCHEMA}.weeks"
-_T_SUBMISSIONS = f"{_CATALOG}.{_SCHEMA}.submissions"
-_T_DRAFTS      = f"{_CATALOG}.{_SCHEMA}.drafts"
-_T_ACCESS      = f"{_CATALOG}.{_SCHEMA}.app_access"
 
-# Volume for file storage (exports, uploads). Not used by the SQL layer below.
+def _pfx() -> str:
+    global _table_prefix
+    if _table_prefix is None:
+        raw = os.environ.get("LAKEBASE_SCHEMA", "volume_data_entry").strip()
+        _table_prefix = f'"{raw}"'
+    return _table_prefix
+
+
+def _T_WEEKS()       -> str: return f"{_pfx()}.weeks"
+def _T_SUBMISSIONS() -> str: return f"{_pfx()}.submissions"
+def _T_DRAFTS()      -> str: return f"{_pfx()}.drafts"
+def _T_ACCESS()      -> str: return f"{_pfx()}.app_access"
+
+
 VOLUME_PATH = "/Volumes/sbx-logistics/volume-data-entry-app/app_volume"
 
 # ── Connection ────────────────────────────────────────────────────────────────
 
-_conn: sql.client.Connection | None = None
-_cfg: Config | None = None
+_conn: psycopg2.extensions.connection | None = None
 
 
-def _config() -> Config:
-    """Databricks auth config — auto-detects PAT or OAuth M2M from the env."""
-    global _cfg
-    if _cfg is None:
-        _cfg = Config()
-    return _cfg
-
-
-def _server_hostname(cfg: Config) -> str:
-    """Bare hostname for the SQL connector — Config.host carries the scheme."""
-    return cfg.host.removeprefix("https://").removeprefix("http://").rstrip("/")
-
-
-def _http_path() -> str:
-    """
-    SQL Warehouse HTTP path. When DATABRICKS_HTTP_PATH is bound to a
-    `sql_warehouse` app resource via `valueFrom`, Databricks Apps inject the
-    warehouse *id* (not the full path) — so accept either form.
-    """
-    raw = os.environ["DATABRICKS_HTTP_PATH"].strip()
-    return raw if raw.startswith("/") else f"/sql/1.0/warehouses/{raw}"
-
-
-def _get_conn() -> sql.client.Connection:
+def _get_conn() -> psycopg2.extensions.connection:
     global _conn
     if _conn is None:
-        cfg = _config()
-        _conn = sql.connect(
-            server_hostname=_server_hostname(cfg),
-            http_path=_http_path(),
-            credentials_provider=lambda: cfg.authenticate,
-            _timeout=30,          # secondi, solleva prima
-            _retry_delay=2,
-            _retry_stop_after_attempts_count=3,
-        )
+        _conn = psycopg2.connect(os.environ["DATABASE_URL"])
+        _conn.autocommit = True
     return _conn
 
 
 def _reset_conn() -> None:
-    """Drop the cached connection so the next call reconnects."""
     global _conn
     try:
         if _conn is not None:
@@ -103,18 +73,11 @@ def _reset_conn() -> None:
 
 
 def _exec(query: str, params: list | None = None) -> pd.DataFrame:
-    """
-    Execute a SELECT and return a DataFrame. Reconnects once on failure: the
-    SQL Warehouse auto-stops after idle time, which drops the cached
-    connection — a read is safe to retry.
-    """
+    """Execute a SELECT; reconnects once on stale-connection failure."""
     for attempt in (1, 2):
         try:
             with _get_conn().cursor() as cur:
                 cur.execute(query, params or [])
-                # description is None until a result-set query has run; for
-                # the SELECTs here it is always populated — `or []` keeps the
-                # type checker happy and stays safe if it ever is None.
                 cols = [d[0] for d in (cur.description or [])]
                 return pd.DataFrame(cur.fetchall(), columns=cols)
         except Exception:
@@ -125,11 +88,7 @@ def _exec(query: str, params: list | None = None) -> pd.DataFrame:
 
 
 def _run(query: str, params: list | None = None) -> None:
-    """
-    Execute an INSERT/UPDATE with no return value. On failure the cached
-    connection is dropped (so the next call reconnects) but the statement is
-    NOT retried automatically, to avoid a double-write.
-    """
+    """Execute an INSERT/UPDATE/MERGE; not retried to avoid double-writes."""
     try:
         with _get_conn().cursor() as cur:
             cur.execute(query, params or [])
@@ -143,21 +102,19 @@ def _run(query: str, params: list | None = None) -> None:
 def get_current_week() -> dict[str, Any]:
     """Return the most recent open week record."""
     df = _exec(
-        f"SELECT week_id, year, created_at FROM {_T_WEEKS} "
+        f"SELECT week_id, year, created_at FROM {_T_WEEKS()} "
         "WHERE is_open = TRUE ORDER BY year DESC, week_id DESC LIMIT 1"
     )
     if df.empty:
-        raise RuntimeError(f"No open week found in {_T_WEEKS}")
-    # Series.to_dict() is typed dict[Hashable, Any]; the columns are all
-    # strings, so rebuild with str keys to match the declared return type.
+        raise RuntimeError(f"No open week found in {_T_WEEKS()}")
     return {str(k): v for k, v in df.iloc[0].to_dict().items()}
 
 
 def create_week(week_id: int, year: int) -> None:
     """Insert a new week (called by the Tuesday scheduler job)."""
     _run(
-        f"INSERT INTO {_T_WEEKS} (week_id, year, created_at, is_open) "
-        "VALUES (?, ?, ?, TRUE)",
+        f"INSERT INTO {_T_WEEKS()} (week_id, year, created_at, is_open) "
+        "VALUES (%s, %s, %s, TRUE)",
         [week_id, year, datetime.now(timezone.utc)],
     )
 
@@ -165,16 +122,12 @@ def create_week(week_id: int, year: int) -> None:
 # ── admins ────────────────────────────────────────────────────────────────────
 
 def get_access() -> dict[str, set[str]]:
-    """
-    Return {email: {site, ...}} from the `app_access` table — the sites each
-    user may edit. The site '*' means every site (admin). Managed with plain
-    SQL — never stored in the repo.
-    """
-    df = _exec(f"SELECT email, site FROM {_T_ACCESS}")
+    """Return {email: {site, ...}} from the app_access table."""
+    df = _exec(f"SELECT email, site FROM {_T_ACCESS()}")
     out: dict[str, set[str]] = {}
     for _, r in df.iterrows():
         email, site = r["email"], r["site"]
-        if email is None or email != email:   # skip NULL / NaN
+        if email is None or email != email:
             continue
         out.setdefault(str(email).strip().lower(), set()).add(str(site).strip())
     return out
@@ -183,19 +136,16 @@ def get_access() -> dict[str, set[str]]:
 # ── submissions ───────────────────────────────────────────────────────────────
 
 def get_submissions(week_id: int, site: str, product_line: str) -> pd.DataFrame:
-    """
-    Return all submission rows for a given week/site/product_line.
-    Includes is_amendment and official_log flags so the UI can show history.
-    """
+    """Return all submission rows for a given week/site/product_line."""
     return _exec(
         f"""
         SELECT submission_id, timestamp, submission_type, channel,
                value_kpcs, is_zero_flagged, official_log,
                comment_preset, comment_other, is_amendment
-        FROM {_T_SUBMISSIONS}
-        WHERE week_id = ?
-          AND site = ?
-          AND product_line = ?
+        FROM {_T_SUBMISSIONS()}
+        WHERE week_id = %s
+          AND site = %s
+          AND product_line = %s
         ORDER BY timestamp ASC
         """,
         [week_id, site, product_line],
@@ -203,22 +153,24 @@ def get_submissions(week_id: int, site: str, product_line: str) -> pd.DataFrame:
 
 
 def get_latest_submissions(week_id: int, site: str, product_line: str) -> pd.DataFrame:
-    """
-    Return the latest submission per (submission_type, channel) key. The
-    authoritative row is the one with official_log = TRUE (maintained by
-    submit_row); QUALIFY is a cheap tie-break for the rare transient duplicate.
-    """
+    """Return the latest submission per (submission_type, channel) key."""
     return _exec(
         f"""
+        WITH ranked AS (
+            SELECT submission_type, channel, value_kpcs,
+                   is_zero_flagged, comment_preset, comment_other,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY submission_type, channel
+                       ORDER BY timestamp DESC
+                   ) AS rn
+            FROM {_T_SUBMISSIONS()}
+            WHERE week_id = %s AND site = %s AND product_line = %s
+              AND official_log = TRUE
+        )
         SELECT submission_type, channel, value_kpcs,
                is_zero_flagged, comment_preset, comment_other
-        FROM {_T_SUBMISSIONS}
-        WHERE week_id = ? AND site = ? AND product_line = ?
-          AND official_log = TRUE
-        QUALIFY ROW_NUMBER() OVER (
-            PARTITION BY submission_type, channel
-            ORDER BY timestamp DESC
-        ) = 1
+        FROM ranked
+        WHERE rn = 1
         """,
         [week_id, site, product_line],
     )
@@ -253,20 +205,12 @@ def submit_row(
     if not rows_to_insert:
         return
 
-    placeholders = ", ".join(["(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"] * len(rows_to_insert))
+    placeholders = ", ".join(["(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"] * len(rows_to_insert))
     params = [p for row in rows_to_insert for p in row]
 
-    # Usiamo un blocco condizionale nativo: 
-    # 1. Mettiamo a FALSE i record vecchi che matchano i canali in arrivo
-    # 2. Inseriamo i nuovi record come TRUE.
-    # Tutto eseguito sequenzialmente ma gestito dal motore per non spaccare i vincoli di riga.
-    
-    # Per essere sicuri al 100% dell'atomicità senza incorrere in bug del compilatore di Databricks,
-    # separiamo i due comandi ma li teniamo puliti. Se preferisci l'unificazione totale, 
-    # ecco il MERGE corretto che non si arrabbia con le righe duplicate:
     _run(
         f"""
-        MERGE INTO {_T_SUBMISSIONS} AS t
+        MERGE INTO {_T_SUBMISSIONS()} AS t
         USING (
             SELECT * FROM (
                 VALUES {placeholders}
@@ -283,16 +227,15 @@ def submit_row(
            AND t.channel = src.channel
            AND t.official_log = TRUE
         WHEN MATCHED THEN
-            UPDATE SET t.official_log = FALSE
+            UPDATE SET official_log = FALSE
         """,
         params,
     )
 
-    # Subito dopo inseriamo i nuovi (la connessione è già calda, il costo è minimo e non rischiamo anomalie)
-    placeholders_insert = ", ".join(["(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE, ?, ?, FALSE, NULL)"] * len(rows_to_insert))
+    placeholders_insert = ", ".join(["(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, TRUE, %s, %s, FALSE, NULL)"] * len(rows_to_insert))
     _run(
         f"""
-        INSERT INTO {_T_SUBMISSIONS}
+        INSERT INTO {_T_SUBMISSIONS()}
           (submission_id, timestamp, week_id, site, product_line,
            user_id, submission_type, channel, value_kpcs,
            is_zero_flagged, official_log,
@@ -311,12 +254,12 @@ def get_draft(week_id: int, site: str, product_line: str,
     return _exec(
         f"""
         SELECT channel, value_kpcs, is_zero_flagged, comment_preset, comment_other
-        FROM {_T_DRAFTS}
-        WHERE week_id = ?
-          AND site = ?
-          AND product_line = ?
-          AND submission_type = ?
-          AND user_id = ?
+        FROM {_T_DRAFTS()}
+        WHERE week_id = %s
+          AND site = %s
+          AND product_line = %s
+          AND submission_type = %s
+          AND user_id = %s
         """,
         [week_id, site, product_line, submission_type, user_id],
     )
@@ -324,20 +267,16 @@ def get_draft(week_id: int, site: str, product_line: str,
 
 def get_drafts(week_id: int, site: str, product_line: str,
                user_id: str) -> pd.DataFrame:
-    """
-    Return every draft row for a (week, site, product_line, user) in one
-    query — one row per (submission_type, channel). Used to load all drafts
-    of a slice at once.
-    """
+    """Return every draft row for a (week, site, product_line, user) in one query."""
     return _exec(
         f"""
         SELECT submission_type, channel, value_kpcs, is_zero_flagged,
                comment_preset, comment_other
-        FROM {_T_DRAFTS}
-        WHERE week_id = ?
-          AND site = ?
-          AND product_line = ?
-          AND user_id = ?
+        FROM {_T_DRAFTS()}
+        WHERE week_id = %s
+          AND site = %s
+          AND product_line = %s
+          AND user_id = %s
         """,
         [week_id, site, product_line, user_id],
     )
@@ -370,49 +309,50 @@ def save_draft(
     if not rows_to_insert:
         return
 
-    placeholders = ", ".join(["(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"] * len(rows_to_insert))
+    placeholders = ", ".join(["(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"] * len(rows_to_insert))
     params = [p for row in rows_to_insert for p in row]
 
     _run(
         f"""
-        MERGE INTO {_T_DRAFTS} AS t
+        MERGE INTO {_T_DRAFTS()} AS t
         USING (
             SELECT * FROM (
                 VALUES {placeholders}
             ) AS s(
-                draft_id, saved_at, week_id, site, product_line, 
-                user_id, submission_type, channel, value_kpcs, 
+                draft_id, saved_at, week_id, site, product_line,
+                user_id, submission_type, channel, value_kpcs,
                 is_zero_flagged, comment_preset, comment_other
             )
         ) AS src
-        ON t.week_id = src.week_id 
-           AND t.site = src.site 
-           AND t.product_line = src.product_line   
-           AND t.submission_type = src.submission_type   
-           AND t.user_id = src.user_id   
+        ON t.week_id = src.week_id
+           AND t.site = src.site
+           AND t.product_line = src.product_line
+           AND t.submission_type = src.submission_type
+           AND t.user_id = src.user_id
            AND t.channel = src.channel
-        WHEN MATCHED THEN 
-            UPDATE SET 
-                t.saved_at = src.saved_at,
-                t.value_kpcs = src.value_kpcs,
-                t.is_zero_flagged = src.is_zero_flagged,
-                t.comment_preset = src.comment_preset,
-                t.comment_other = src.comment_other
-        WHEN NOT MATCHED THEN 
+        WHEN MATCHED THEN
+            UPDATE SET
+                saved_at = src.saved_at,
+                value_kpcs = src.value_kpcs,
+                is_zero_flagged = src.is_zero_flagged,
+                comment_preset = src.comment_preset,
+                comment_other = src.comment_other
+        WHEN NOT MATCHED THEN
             INSERT (draft_id, saved_at, week_id, site, product_line, user_id, submission_type, channel, value_kpcs, is_zero_flagged, comment_preset, comment_other)
             VALUES (src.draft_id, src.saved_at, src.week_id, src.site, src.product_line, src.user_id, src.submission_type, src.channel, src.value_kpcs, src.is_zero_flagged, src.comment_preset, src.comment_other)
         """,
         params,
     )
 
+
 def delete_draft(week_id: int, site: str, product_line: str,
                  submission_type: str, user_id: str) -> None:
     """Remove draft after a successful Submit."""
     _run(
         f"""
-        DELETE FROM {_T_DRAFTS}
-        WHERE week_id = ? AND site = ? AND product_line = ?
-          AND submission_type = ? AND user_id = ?
+        DELETE FROM {_T_DRAFTS()}
+        WHERE week_id = %s AND site = %s AND product_line = %s
+          AND submission_type = %s AND user_id = %s
         """,
         [week_id, site, product_line, submission_type, user_id],
     )
@@ -421,22 +361,25 @@ def delete_draft(week_id: int, site: str, product_line: str,
 # ── extract (read-only, for the Excel Dashboard) ──────────────────────────────
 
 def get_gli_extract(week_id: int) -> pd.DataFrame:
-    """
-    Return the full extract for a given week (all sites, both PLs) — the
-    authoritative row per key (official_log = TRUE). One query; used both by the
-    Excel Dashboard and by the in-app GLOBAL view.
-    """
+    """Return the full extract for a given week — the authoritative row per key."""
     return _exec(
         f"""
+        WITH ranked AS (
+            SELECT week_id, site, product_line, submission_type,
+                   channel, value_kpcs, is_zero_flagged,
+                   comment_preset, comment_other, timestamp, user_id,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY site, product_line, submission_type, channel
+                       ORDER BY timestamp DESC
+                   ) AS rn
+            FROM {_T_SUBMISSIONS()}
+            WHERE week_id = %s AND official_log = TRUE
+        )
         SELECT week_id, site, product_line, submission_type,
                channel, value_kpcs, is_zero_flagged,
                comment_preset, comment_other, timestamp, user_id
-        FROM {_T_SUBMISSIONS}
-        WHERE week_id = ? AND official_log = TRUE
-        QUALIFY ROW_NUMBER() OVER (
-            PARTITION BY site, product_line, submission_type, channel
-            ORDER BY timestamp DESC
-        ) = 1
+        FROM ranked
+        WHERE rn = 1
         ORDER BY site, product_line, submission_type, channel
         """,
         [week_id],

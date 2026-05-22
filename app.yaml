@@ -1,5 +1,5 @@
-# Databricks App command. The HTTP path for the SQL Warehouse must be
-# configured in the app environment settings so `data/db.py` can connect.
+# Databricks App command. The Lakebase resource (key: "database") injects the
+# PostgreSQL connection URL with credentials into DATABASE_URL automatically.
 command:
   - gunicorn
   - "app:server"
@@ -7,5 +7,7 @@ command:
   - gunicorn.conf.py
 
 env:
-  - name: DATABRICKS_HTTP_PATH
-    valueFrom: sql-warehouse
+  - name: DATABASE_URL
+    valueFrom: database
+  - name: LAKEBASE_SCHEMA
+    value: volume_data_entry

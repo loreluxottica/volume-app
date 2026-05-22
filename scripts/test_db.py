@@ -1,5 +1,5 @@
 # scripts/test_db.py
-# Test database connectivity and write access for the volumes app.
+# Test database connectivity and write access for the volumes app (Lakebase).
 
 from __future__ import annotations
 
@@ -9,8 +9,6 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-# Allow running as `python scripts/test_db.py`: put the repo root (parent of
-# this file's folder) on sys.path so the `data` package is importable.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from data import db
@@ -18,7 +16,6 @@ from data import db
 
 @dataclass
 class Config:
-    http_path: str
     week_id: int
     site: str
     product_line: str
@@ -29,9 +26,13 @@ def load_config() -> Config:
     """
     Build the test config from the environment.
 
-    Auth is NOT read here — data/db.py resolves credentials via
-    databricks.sdk.Config. Set either DATABRICKS_HOST + DATABRICKS_TOKEN
-    (a PAT), or DATABRICKS_CONFIG_PROFILE to reuse a CLI-authenticated profile.
+    Auth: data/db.py fetches a token via databricks.sdk.Config and injects it
+    as the PostgreSQL password. Set DATABRICKS_HOST + DATABRICKS_TOKEN (PAT)
+    or DATABRICKS_CONFIG_PROFILE to use a CLI-authenticated profile.
+
+    Required:
+      DATABRICKS_LAKEBASE_URL  — PostgreSQL URL without password
+      TEST_WEEK_ID             — an open week_id to test against
     """
     missing = []
 
@@ -44,8 +45,8 @@ def load_config() -> Config:
     def optional(name: str, default: str) -> str:
         return os.environ.get(name) or default
 
-    http_path    = require("DATABRICKS_HTTP_PATH")
-    week_id      = require("TEST_WEEK_ID")
+    _url     = require("DATABRICKS_LAKEBASE_URL")
+    week_id  = require("TEST_WEEK_ID")
     site         = optional("TEST_SITE", "test-site")
     product_line = optional("TEST_PRODUCT_LINE", "test-product-line")
     user_id      = optional("TEST_USER_ID", f"test-user-{uuid.uuid4().hex[:8]}")
@@ -54,15 +55,14 @@ def load_config() -> Config:
         raise SystemExit(
             "Missing environment variables: " + ", ".join(missing) + "\n"
             "Required:\n"
-            "  DATABRICKS_HTTP_PATH  — SQL Warehouse HTTP path or warehouse id\n"
-            "  TEST_WEEK_ID          — an open week_id to test against\n"
-            "Auth (db.py resolves it via databricks.sdk.Config):\n"
+            "  DATABRICKS_LAKEBASE_URL — Lakebase PostgreSQL URL (no password)\n"
+            "  TEST_WEEK_ID            — an open week_id to test against\n"
+            "Auth (db.py resolves token via databricks.sdk.Config):\n"
             "  DATABRICKS_HOST + DATABRICKS_TOKEN (a PAT), or\n"
             "  DATABRICKS_CONFIG_PROFILE to use a CLI-authenticated profile."
         )
 
     return Config(
-        http_path=http_path,
         week_id=int(week_id),
         site=site,
         product_line=product_line,
@@ -72,7 +72,7 @@ def load_config() -> Config:
 
 def main() -> None:
     config = load_config()
-    print("Running DB test against Databricks SQL Warehouse")
+    print("Running DB test against Databricks Lakebase")
     print("Target week_id:", config.week_id)
     print("Test site:", config.site)
     print("Test product line:", config.product_line)
@@ -82,7 +82,6 @@ def main() -> None:
         print("Read check: current open week:", current_week)
     except Exception as exc:
         print("Read check failed:", exc)
-        print("This may still be okay if the open week is not the same as TEST_WEEK_ID.")
 
     print("Writing a draft row to the drafts table...")
     values = {"TEST_CHANNEL": 0.0}
