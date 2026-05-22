@@ -65,10 +65,21 @@ def _config() -> Config:
     return _cfg
 
 
+def _get_token() -> str:
+    """Return the current OAuth/PAT token regardless of auth method."""
+    cfg = _config()
+    # Config.token is only set for PAT; for M2M OAuth use the credentials provider.
+    if cfg.token:
+        return cfg.token
+    headers = cfg.authenticate()
+    bearer = headers.get("Authorization", "")
+    return bearer.removeprefix("Bearer ").strip()
+
+
 def _build_conn_url() -> str:
     """Inject the Databricks OAuth/M2M token as the PostgreSQL password."""
-    base  = os.environ["DATABRICKS_LAKEBASE_URL"].strip()
-    token = _config().token
+    base   = os.environ["DATABRICKS_LAKEBASE_URL"].strip()
+    token  = _get_token()
     parsed = urlparse(base)
     userinfo = parsed.username or "token"
     netloc = f"{userinfo}:{quote_plus(token)}@{parsed.hostname}"
