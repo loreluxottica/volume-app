@@ -21,6 +21,20 @@ from data.schema import (
     cols_below_threshold, wip_ot_below_threshold,
 )
 
+_PRESET_LABELS: dict[str, str] = {
+    p["id"]: p["label"]
+    for preset_list in [COMMENT_PRESETS, COMMENT_PRESETS_WIP_OT]
+    for p in preset_list
+}
+
+
+def _comment_text(fc: dict) -> str:
+    parts = [_PRESET_LABELS.get(p, p) for p in fc.get("presets", [])]
+    other = (fc.get("others") or "").strip()
+    if other:
+        parts.append(other)
+    return "; ".join(parts)
+
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -822,6 +836,7 @@ def render_friday_row(
     fri_open: bool,
     deadline: str,
     is_readonly: bool,
+    comments: dict | None = None,
 ) -> html.Tr:
     below_ids = set(cols_below_threshold(fri_values, mon_values, na_cols, cols))
 
@@ -846,8 +861,11 @@ def render_friday_row(
         is_below = cid in below_ids and not is_submitted
         cell_cls = "data-cell" + (" data-cell-below" if is_below else "")
         disp_cls = "fri-display" + (" fri-display-below" if is_below else " fri-display-empty" if not val else "")
+        fc = (comments or {}).get(cid, {})
+        ct = _comment_text(fc) if fc else ""
         data_cells.append(html.Td(className=cell_cls, children=[
             html.Span(val or "—", className=disp_cls),
+            html.Div(ct, className="cell-comment-chip", title=ct) if ct else None,
         ]))
 
     if is_submitted:
@@ -895,6 +913,7 @@ def render_wip_ot_row(
     wip_ot_open: bool,
     deadline: str,
     is_readonly: bool,
+    comments: dict | None = None,
 ) -> html.Tr:
     below_ids = set(wip_ot_below_threshold(wip_ot_values, na_cols, cols))
 
@@ -919,8 +938,11 @@ def render_wip_ot_row(
         is_below = cid in below_ids and not is_submitted
         cell_cls = "data-cell" + (" data-cell-below" if is_below else "")
         disp_cls = "fri-display" + (" fri-display-below" if is_below else " fri-display-empty" if not val else "")
+        fc = (comments or {}).get(cid, {})
+        ct = _comment_text(fc) if fc else ""
         data_cells.append(html.Td(className=cell_cls, children=[
             html.Span(val or "—", className=disp_cls),
+            html.Div(ct, className="cell-comment-chip", title=ct) if ct else None,
         ]))
 
     if is_submitted:
@@ -969,6 +991,7 @@ def render_actual_row(
     actual_open: bool,
     deadline: str,
     is_readonly: bool,
+    comments: dict | None = None,
 ) -> html.Tr:
     below_ids = set(cols_below_threshold(actual_values, mon_values, na_cols, cols))
 
@@ -993,8 +1016,11 @@ def render_actual_row(
         is_below = cid in below_ids and not is_submitted
         cell_cls = "data-cell" + (" data-cell-below" if is_below else "")
         disp_cls = "fri-display" + (" fri-display-below" if is_below else " fri-display-empty" if not val else "")
+        fc = (comments or {}).get(cid, {})
+        ct = _comment_text(fc) if fc else ""
         data_cells.append(html.Td(className=cell_cls, children=[
             html.Span(val or "—", className=disp_cls),
+            html.Div(ct, className="cell-comment-chip", title=ct) if ct else None,
         ]))
 
     if is_submitted:
@@ -1043,6 +1069,7 @@ def render_thu_row(
     thu_open: bool,
     deadline: str,
     is_readonly: bool,
+    comments: dict | None = None,
 ) -> html.Tr:
     below_ids = set(cols_below_threshold(thu_values, mon_values, na_cols, cols))
 
@@ -1067,8 +1094,11 @@ def render_thu_row(
         is_below = cid in below_ids and not is_submitted
         cell_cls = "data-cell" + (" data-cell-below" if is_below else "")
         disp_cls = "fri-display" + (" fri-display-below" if is_below else " fri-display-empty" if not val else "")
+        fc = (comments or {}).get(cid, {})
+        ct = _comment_text(fc) if fc else ""
         data_cells.append(html.Td(className=cell_cls, children=[
             html.Span(val or "—", className=disp_cls),
+            html.Div(ct, className="cell-comment-chip", title=ct) if ct else None,
         ]))
 
     if is_submitted:
@@ -1145,6 +1175,7 @@ def render_data_table(
                 fri_open=fri_open,
                 deadline=dl.get(rid, ""),
                 is_readonly=is_readonly,
+                comments=fri_comments,
             ))
             if fri_open and not submitted.get(rid) and not is_readonly:
                 tbody_rows.append(html.Tr(html.Td(
@@ -1169,6 +1200,7 @@ def render_data_table(
                 thu_open=thu_open,
                 deadline=dl.get(rid, ""),
                 is_readonly=is_readonly,
+                comments=thu_comments or {},
             ))
             if thu_open and not submitted.get(rid) and not is_readonly:
                 tbody_rows.append(html.Tr(html.Td(
@@ -1192,6 +1224,7 @@ def render_data_table(
                 wip_ot_open=wip_ot_open,
                 deadline=dl.get(rid, ""),
                 is_readonly=is_readonly,
+                comments=wip_ot_comments or {},
             ))
             if wip_ot_open and not submitted.get(rid) and not is_readonly:
                 tbody_rows.append(html.Tr(html.Td(
@@ -1215,6 +1248,7 @@ def render_data_table(
                 actual_open=actual_open,
                 deadline=dl.get(rid, ""),
                 is_readonly=is_readonly,
+                comments=actual_comments or {},
             ))
             if actual_open and not submitted.get(rid) and not is_readonly:
                 tbody_rows.append(html.Tr(html.Td(
