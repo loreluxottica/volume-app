@@ -253,15 +253,18 @@ body {
 .fri-display-empty { color: var(--text-3); }
 .cell-comment-chip {
   font-size: 9px;
-  color: var(--text-3);
+  color: #5a4fcf;
   font-style: italic;
-  margin-top: 2px;
-  padding: 0 5px;
-  max-width: 120px;
+  margin-top: 3px;
+  padding: 1px 4px;
+  max-width: 130px;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
   cursor: default;
+  background: #ededff;
+  border-radius: 3px;
+  display: inline-block;
 }
 
 /* Zero flag badge */
