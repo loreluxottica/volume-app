@@ -253,7 +253,7 @@ body {
 .fri-display-empty { color: var(--text-3); }
 .cell-comment-chip {
   font-size: 9px;
-  color: #5a4fcf;
+  color: var(--text-2);
   font-style: italic;
   margin-top: 3px;
   padding: 1px 4px;
@@ -262,7 +262,7 @@ body {
   white-space: nowrap;
   text-overflow: ellipsis;
   cursor: default;
-  background: #ededff;
+  background: var(--surface2);
   border-radius: 3px;
   display: inline-block;
 }

@@ -1096,10 +1096,9 @@ def render_thu_row(
         disp_cls = "fri-display" + (" fri-display-below" if is_below else " fri-display-empty" if not val else "")
         fc = (comments or {}).get(cid, {})
         ct = _comment_text(fc) if fc else ""
-        debug = f"[dbg fc={bool(fc)} ct={repr(ct[:10]) if ct else 'empty'}]"
         data_cells.append(html.Td(className=cell_cls, children=[
             html.Span(val or "—", className=disp_cls),
-            html.Div(debug, className="cell-comment-chip"),
+            html.Div(ct, className="cell-comment-chip", title=ct) if ct else None,
         ]))
 
     if is_submitted:
@@ -1120,8 +1119,6 @@ def render_thu_row(
             n_clicks=0,
         )
 
-    n_cols = len([c for c in cols if c["id"] not in na_cols])
-    debug_label = f"[dbg called cols={n_cols} cmts={bool(comments)}]"
     return html.Tr(className=row_cls, children=[
         html.Td(className="label-cell", children=[
             html.Div(className="row-name-wrap", children=[
@@ -1129,7 +1126,6 @@ def render_thu_row(
                 html.Span("Thursday FRC", className="row-name", style={"marginLeft": "7px"}),
             ]),
             html.Div(deadline, className="deadline-tag"),
-            html.Div(debug_label, className="cell-comment-chip"),
         ]),
         *data_cells,
         html.Td(className="action-cell", children=[action]),
