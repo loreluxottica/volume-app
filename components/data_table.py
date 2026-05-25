@@ -1096,9 +1096,10 @@ def render_thu_row(
         disp_cls = "fri-display" + (" fri-display-below" if is_below else " fri-display-empty" if not val else "")
         fc = (comments or {}).get(cid, {})
         ct = _comment_text(fc) if fc else ""
+        debug = f"[dbg fc={bool(fc)} ct={repr(ct[:10]) if ct else 'empty'}]"
         data_cells.append(html.Td(className=cell_cls, children=[
             html.Span(val or "—", className=disp_cls),
-            html.Div(ct, className="cell-comment-chip", title=ct) if ct else None,
+            html.Div(debug, className="cell-comment-chip"),
         ]))
 
     if is_submitted:
