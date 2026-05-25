@@ -100,12 +100,6 @@ def render_app_header(
             style={"display": "none" if is_readonly else "flex"},
             children=[
                 html.Button(
-                    ["⊘ ", "Confirm zero on all"],
-                    id="btn-confirm-zero-all",
-                    className="action-btn btn-save-all",
-                    n_clicks=0,
-                ),
-                html.Button(
                     ["⤓ ", "Save all drafts"],
                     id="btn-save-all",
                     className="action-btn btn-save-all",

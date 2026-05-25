@@ -1539,47 +1539,6 @@ def change_thu(n, state: dict):
     return state, "Thursday FRC re-opened for editing."
 
 
-# ── Confirm zero on all (bulk) ────────────────────────────────────────────────
-# Sets value 0 + is_zero_flagged on every blank non-N/A cell of every non-
-# submitted row, in one action (BBP §6.4). Reversible per cell before Submit.
-
-@app.callback(
-    Output("app-state",   "data", allow_duplicate=True),
-    Output("form-values", "data", allow_duplicate=True),
-    Output("toast-store", "data", allow_duplicate=True),
-    Input("btn-confirm-zero-all", "n_clicks"),
-    State("app-state", "data"),
-    State("form-values", "data"),
-    prevent_initial_call=True,
-)
-def confirm_zero_all(n, app_data: dict, form_data: dict):
-    state = _merge(app_data, form_data)
-    if not n:
-        return dash.no_update, dash.no_update, dash.no_update
-
-    site, pl = state["site"], state["pl"]
-    if not _can_edit(site, state):
-        return dash.no_update, dash.no_update, f"⚠ No permission to edit {site}."
-
-    cols  = COLS_BY_PL[pl]
-    count = 0
-    for row in ROWS:
-        rid = row["id"]
-        if state["submitted"][site][pl].get(rid):
-            continue
-        na_cols = na_matrix(site, pl).get(rid, [])
-        blank = incomplete_cells(state["values"][site][pl][rid],
-                                 state["zero_flags"][site][pl][rid], na_cols, cols)
-        for cid in blank:
-            state["values"][site][pl][rid][cid]     = "0"
-            state["zero_flags"][site][pl][rid][cid] = True
-            count += 1
-
-    if not count:
-        return dash.no_update, dash.no_update, "No blank cells to confirm."
-    return _app_part(state), _form_part(state), f"✓ {count} blank cell(s) confirmed as zero"
-
-
 # ── Undo a confirmed zero (standard-row cell) ─────────────────────────────────
 
 @app.callback(
