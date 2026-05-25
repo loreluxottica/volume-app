@@ -1120,6 +1120,8 @@ def render_thu_row(
             n_clicks=0,
         )
 
+    n_cols = len([c for c in cols if c["id"] not in na_cols])
+    debug_label = f"[dbg called cols={n_cols} cmts={bool(comments)}]"
     return html.Tr(className=row_cls, children=[
         html.Td(className="label-cell", children=[
             html.Div(className="row-name-wrap", children=[
@@ -1127,6 +1129,7 @@ def render_thu_row(
                 html.Span("Thursday FRC", className="row-name", style={"marginLeft": "7px"}),
             ]),
             html.Div(deadline, className="deadline-tag"),
+            html.Div(debug_label, className="cell-comment-chip"),
         ]),
         *data_cells,
         html.Td(className="action-cell", children=[action]),
