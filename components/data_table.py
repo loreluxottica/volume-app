@@ -865,7 +865,7 @@ def render_friday_row(
         ct = _comment_text(fc) if fc else ""
         data_cells.append(html.Td(className=cell_cls, children=[
             html.Span(val or "—", className=disp_cls),
-            html.Div(ct, className="cell-comment-chip", title=ct) if ct else None,
+            html.Div([html.Span("● ", className="chip-dot"), ct], className="cell-comment-chip", title=ct) if ct else None,
         ]))
 
     if is_submitted:
@@ -942,7 +942,7 @@ def render_wip_ot_row(
         ct = _comment_text(fc) if fc else ""
         data_cells.append(html.Td(className=cell_cls, children=[
             html.Span(val or "—", className=disp_cls),
-            html.Div(ct, className="cell-comment-chip", title=ct) if ct else None,
+            html.Div([html.Span("● ", className="chip-dot"), ct], className="cell-comment-chip", title=ct) if ct else None,
         ]))
 
     if is_submitted:
@@ -1020,7 +1020,7 @@ def render_actual_row(
         ct = _comment_text(fc) if fc else ""
         data_cells.append(html.Td(className=cell_cls, children=[
             html.Span(val or "—", className=disp_cls),
-            html.Div(ct, className="cell-comment-chip", title=ct) if ct else None,
+            html.Div([html.Span("● ", className="chip-dot"), ct], className="cell-comment-chip", title=ct) if ct else None,
         ]))
 
     if is_submitted:
@@ -1098,7 +1098,7 @@ def render_thu_row(
         ct = _comment_text(fc) if fc else ""
         data_cells.append(html.Td(className=cell_cls, children=[
             html.Span(val or "—", className=disp_cls),
-            html.Div(ct, className="cell-comment-chip", title=ct) if ct else None,
+            html.Div([html.Span("● ", className="chip-dot"), ct], className="cell-comment-chip", title=ct) if ct else None,
         ]))
 
     if is_submitted:

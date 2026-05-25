@@ -251,6 +251,7 @@ body {
 .fri-display { font-size: 12px; font-family: var(--mono); color: var(--text-2); text-align: right; padding: 4px 5px; display: block; }
 .fri-display-below { color: #8b2e1a; font-weight: 600; }
 .fri-display-empty { color: var(--text-3); }
+.chip-dot { color: var(--dot-amber); font-style: normal; }
 .cell-comment-chip {
   font-size: 9px;
   color: var(--text-2);
