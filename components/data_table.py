@@ -852,8 +852,11 @@ def render_friday_row(
 
         zf = zero_flags.get(cid, False)
         if zf:
+            fc = (comments or {}).get(cid, {})
+            ct = _comment_text(fc) if fc else ""
             data_cells.append(html.Td(className="data-cell", children=[
-                html.Div(className="zero-cell", children=[html.Span("ZERO ✓", className="zero-label")])
+                html.Div(className="zero-cell", children=[html.Span("ZERO ✓", className="zero-label")]),
+                html.Div([html.Span("● ", className="chip-dot"), ct], className="cell-comment-chip", title=ct) if ct else None,
             ]))
             continue
 
@@ -929,8 +932,11 @@ def render_wip_ot_row(
 
         zf = zero_flags.get(cid, False)
         if zf:
+            fc = (comments or {}).get(cid, {})
+            ct = _comment_text(fc) if fc else ""
             data_cells.append(html.Td(className="data-cell", children=[
-                html.Div(className="zero-cell", children=[html.Span("ZERO ✓", className="zero-label")])
+                html.Div(className="zero-cell", children=[html.Span("ZERO ✓", className="zero-label")]),
+                html.Div([html.Span("● ", className="chip-dot"), ct], className="cell-comment-chip", title=ct) if ct else None,
             ]))
             continue
 
@@ -1007,8 +1013,11 @@ def render_actual_row(
 
         zf = zero_flags.get(cid, False)
         if zf:
+            fc = (comments or {}).get(cid, {})
+            ct = _comment_text(fc) if fc else ""
             data_cells.append(html.Td(className="data-cell", children=[
-                html.Div(className="zero-cell", children=[html.Span("ZERO ✓", className="zero-label")])
+                html.Div(className="zero-cell", children=[html.Span("ZERO ✓", className="zero-label")]),
+                html.Div([html.Span("● ", className="chip-dot"), ct], className="cell-comment-chip", title=ct) if ct else None,
             ]))
             continue
 
@@ -1085,8 +1094,11 @@ def render_thu_row(
 
         zf = zero_flags.get(cid, False)
         if zf:
+            fc = (comments or {}).get(cid, {})
+            ct = _comment_text(fc) if fc else ""
             data_cells.append(html.Td(className="data-cell", children=[
-                html.Div(className="zero-cell", children=[html.Span("ZERO ✓", className="zero-label")])
+                html.Div(className="zero-cell", children=[html.Span("ZERO ✓", className="zero-label")]),
+                html.Div([html.Span("● ", className="chip-dot"), ct], className="cell-comment-chip", title=ct) if ct else None,
             ]))
             continue
 
