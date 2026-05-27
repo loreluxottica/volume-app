@@ -27,6 +27,8 @@ from data.db import (
 _lock = threading.Lock()
 
 _current_week: dict[str, Any] | None = None
+_current_week_ts: float = 0.0          # monotonic timestamp of last fetch
+_WEEK_TTL = 1800                        # re-check DB every 30 min
 _access: dict[str, set[str]] | None = None
 _submissions_cache: dict[tuple, pd.DataFrame] = {}
 _drafts_cache: dict[tuple, pd.DataFrame] = {}
@@ -34,11 +36,19 @@ _gli_cache: dict[int, pd.DataFrame] = {}
 
 
 def cached_current_week() -> dict[str, Any]:
-    global _current_week
-    if _current_week is None:
+    global _current_week, _current_week_ts
+    now = monotonic()
+    if _current_week is None or (now - _current_week_ts) > _WEEK_TTL:
         with _lock:
-            if _current_week is None:
-                _current_week = get_current_week()
+            if _current_week is None or (monotonic() - _current_week_ts) > _WEEK_TTL:
+                fresh = get_current_week()
+                if _current_week is not None and fresh.get("week_id") != _current_week.get("week_id"):
+                    # New week opened — drop stale submissions/drafts/extracts
+                    _submissions_cache.clear()
+                    _drafts_cache.clear()
+                    _gli_cache.clear()
+                _current_week = fresh
+                _current_week_ts = monotonic()
     return _current_week
 
 
