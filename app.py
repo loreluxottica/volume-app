@@ -1121,6 +1121,13 @@ def submit_fri(n1, n2, app_data: dict, form_data: dict):
         missing_labels = [c["label"] for c in cols if c["id"] in missing]
         return _app_part(state), f"⚠ Comment required: {', '.join(missing_labels)}"
 
+    # Drop stale comments for cells no longer below threshold.
+    keep = set(below_ids)
+    state["fri_comments"][site][pl] = {
+        cid: fc_entry for cid, fc_entry in state["fri_comments"][site][pl].items()
+        if cid in keep
+    }
+
     values, zero_flags, comments = _db_payload(state, site, pl, "fri_frc")
     week = current_week()["week_id"]
     try:
@@ -1245,6 +1252,13 @@ def submit_wip_ot(n1, n2, app_data: dict, form_data: dict):
         state["submit_attempted"] = True
         missing_labels = [c["label"] for c in cols if c["id"] in missing]
         return _app_part(state), f"⚠ Comment required: {', '.join(missing_labels)}"
+
+    # Drop stale comments for cells no longer below threshold.
+    keep = set(below_ids)
+    state["wip_ot_comments"][site][pl] = {
+        cid: fc_entry for cid, fc_entry in state["wip_ot_comments"][site][pl].items()
+        if cid in keep
+    }
 
     values, zero_flags, comments = _db_payload(state, site, pl, "wip_ot")
     week = current_week()["week_id"]
@@ -1372,6 +1386,13 @@ def submit_actual(n1, n2, app_data: dict, form_data: dict):
         missing_labels = [c["label"] for c in cols if c["id"] in missing]
         return _app_part(state), f"⚠ Comment required: {', '.join(missing_labels)}"
 
+    # Drop stale comments for cells no longer below threshold.
+    keep = set(below_ids)
+    state["actual_comments"][site][pl] = {
+        cid: fc_entry for cid, fc_entry in state["actual_comments"][site][pl].items()
+        if cid in keep
+    }
+
     values, zero_flags, comments = _db_payload(state, site, pl, "actual")
     week = current_week()["week_id"]
     try:
@@ -1497,6 +1518,13 @@ def submit_thu(n1, n2, app_data: dict, form_data: dict):
         state["submit_attempted"] = True
         missing_labels = [c["label"] for c in cols if c["id"] in missing]
         return _app_part(state), f"⚠ Comment required: {', '.join(missing_labels)}"
+
+    # Drop stale comments for cells no longer below threshold.
+    keep = set(below_ids)
+    state["thu_comments"][site][pl] = {
+        cid: fc_entry for cid, fc_entry in state["thu_comments"][site][pl].items()
+        if cid in keep
+    }
 
     values, zero_flags, comments = _db_payload(state, site, pl, "thu_frc")
     week = current_week()["week_id"]

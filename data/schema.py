@@ -253,10 +253,11 @@ SITE_OWNERS = {
 
 # Comment pre-sets for Friday FRC variance
 COMMENT_PRESETS = [
-    {"id": "logistics",      "label": "Logistics reasons"},
-    {"id": "stock",          "label": "Stock availability"},
-    {"id": "orders",         "label": "Order reasons (market)"},
-    {"id": "prioritization", "label": "Prioritization"},
+    {"id": "logistics",      "label": "Logistic",            "color": "#0e7c9b", "icon": "dot"},
+    {"id": "orders",         "label": "Orders",              "color": "#e573b7", "icon": "dot"},
+    {"id": "stock",          "label": "Stock availability",  "color": "#b4b2a9", "icon": "dot"},
+    {"id": "prioritization", "label": "Prioritization WHLS", "color": "#000000", "icon": "star"},
+    {"id": "force_majeure",  "label": "Force Majeure",       "color": "#000000", "icon": "dot"},
 ]
 
 # Comment pre-sets for WIP OT below threshold

@@ -251,22 +251,22 @@ body {
 .fri-display { font-size: 12px; font-family: var(--mono); color: var(--text-2); text-align: right; padding: 4px 5px; display: block; }
 .fri-display-below { color: #8b2e1a; font-weight: 600; }
 .fri-display-empty { color: var(--text-3); }
-.chip-dot { color: var(--dot-amber); font-style: normal; }
+.chip-dot { font-style: normal; }
 .cell-comment-chip {
   font-size: 9px;
   color: var(--text-2);
-  font-style: italic;
   margin-top: 3px;
-  padding: 1px 4px;
-  max-width: 130px;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
+  padding: 2px 4px;
+  max-width: 160px;
   cursor: default;
   background: var(--surface2);
   border-radius: 3px;
-  display: inline-block;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
 }
+.chip-line { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chip-line-other { font-style: italic; color: var(--text-3); }
 
 /* Zero flag badge */
 .zero-cell { display: flex; flex-direction: column; align-items: flex-end; padding: 3px 5px; gap: 2px; }

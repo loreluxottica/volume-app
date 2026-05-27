@@ -27,6 +27,12 @@ _PRESET_LABELS: dict[str, str] = {
     for p in preset_list
 }
 
+_PRESET_META: dict[str, dict] = {
+    p["id"]: p
+    for preset_list in [COMMENT_PRESETS, COMMENT_PRESETS_WIP_OT]
+    for p in preset_list
+}
+
 
 def _comment_text(fc: dict) -> str:
     parts = [_PRESET_LABELS.get(p, p) for p in fc.get("presets", [])]
@@ -34,6 +40,27 @@ def _comment_text(fc: dict) -> str:
     if other:
         parts.append(other)
     return "; ".join(parts)
+
+
+def _render_chip(fc: dict | None):
+    """Vertical-stacked chip: one line per preset + one for 'others'."""
+    if not fc:
+        return None
+    lines = []
+    for pid in fc.get("presets", []):
+        meta = _PRESET_META.get(pid, {"label": pid, "color": "#ef9f27", "icon": "dot"})
+        glyph = "★" if meta.get("icon") == "star" else "●"
+        lines.append(html.Div(className="chip-line", children=[
+            html.Span(glyph, className="chip-dot",
+                      style={"color": meta.get("color", "#ef9f27")}),
+            " ", meta.get("label", pid),
+        ]))
+    other = (fc.get("others") or "").strip()
+    if other:
+        lines.append(html.Div(other, className="chip-line chip-line-other"))
+    if not lines:
+        return None
+    return html.Div(lines, className="cell-comment-chip", title=_comment_text(fc))
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -183,7 +210,16 @@ def render_friday_panel(
             ),
             dcc.Checklist(
                 id={"type": "fri-presets", "col": cid},
-                options=[{"label": p["label"], "value": p["id"]} for p in COMMENT_PRESETS],
+                options=[{
+                    "label": html.Span([
+                        html.Span("★" if p.get("icon") == "star" else "●",
+                                  className="preset-dot",
+                                  style={"color": p.get("color", "#ef9f27"),
+                                         "marginRight": "5px"}),
+                        p["label"],
+                    ]),
+                    "value": p["id"],
+                } for p in COMMENT_PRESETS],
                 value=fc.get("presets", []),
                 className="preset-checklist",
             ),
@@ -487,7 +523,16 @@ def render_actual_panel(
             ),
             dcc.Checklist(
                 id={"type": "actual-presets", "col": cid},
-                options=[{"label": p["label"], "value": p["id"]} for p in COMMENT_PRESETS],
+                options=[{
+                    "label": html.Span([
+                        html.Span("★" if p.get("icon") == "star" else "●",
+                                  className="preset-dot",
+                                  style={"color": p.get("color", "#ef9f27"),
+                                         "marginRight": "5px"}),
+                        p["label"],
+                    ]),
+                    "value": p["id"],
+                } for p in COMMENT_PRESETS],
                 value=fc.get("presets", []),
                 className="preset-checklist",
             ),
@@ -642,7 +687,16 @@ def render_thu_panel(
             ),
             dcc.Checklist(
                 id={"type": "thu-presets", "col": cid},
-                options=[{"label": p["label"], "value": p["id"]} for p in COMMENT_PRESETS],
+                options=[{
+                    "label": html.Span([
+                        html.Span("★" if p.get("icon") == "star" else "●",
+                                  className="preset-dot",
+                                  style={"color": p.get("color", "#ef9f27"),
+                                         "marginRight": "5px"}),
+                        p["label"],
+                    ]),
+                    "value": p["id"],
+                } for p in COMMENT_PRESETS],
                 value=fc.get("presets", []),
                 className="preset-checklist",
             ),
@@ -856,7 +910,7 @@ def render_friday_row(
             ct = _comment_text(fc) if fc else ""
             data_cells.append(html.Td(className="data-cell", children=[
                 html.Div(className="zero-cell", children=[html.Span("ZERO ✓", className="zero-label")]),
-                html.Div([html.Span("● ", className="chip-dot"), ct], className="cell-comment-chip", title=ct) if ct else None,
+                _render_chip(fc),
             ]))
             continue
 
@@ -868,7 +922,7 @@ def render_friday_row(
         ct = _comment_text(fc) if fc else ""
         data_cells.append(html.Td(className=cell_cls, children=[
             html.Span(val or "—", className=disp_cls),
-            html.Div([html.Span("● ", className="chip-dot"), ct], className="cell-comment-chip", title=ct) if ct else None,
+            _render_chip(fc),
         ]))
 
     if is_submitted:
@@ -936,7 +990,7 @@ def render_wip_ot_row(
             ct = _comment_text(fc) if fc else ""
             data_cells.append(html.Td(className="data-cell", children=[
                 html.Div(className="zero-cell", children=[html.Span("ZERO ✓", className="zero-label")]),
-                html.Div([html.Span("● ", className="chip-dot"), ct], className="cell-comment-chip", title=ct) if ct else None,
+                _render_chip(fc),
             ]))
             continue
 
@@ -948,7 +1002,7 @@ def render_wip_ot_row(
         ct = _comment_text(fc) if fc else ""
         data_cells.append(html.Td(className=cell_cls, children=[
             html.Span(val or "—", className=disp_cls),
-            html.Div([html.Span("● ", className="chip-dot"), ct], className="cell-comment-chip", title=ct) if ct else None,
+            _render_chip(fc),
         ]))
 
     if is_submitted:
@@ -1017,7 +1071,7 @@ def render_actual_row(
             ct = _comment_text(fc) if fc else ""
             data_cells.append(html.Td(className="data-cell", children=[
                 html.Div(className="zero-cell", children=[html.Span("ZERO ✓", className="zero-label")]),
-                html.Div([html.Span("● ", className="chip-dot"), ct], className="cell-comment-chip", title=ct) if ct else None,
+                _render_chip(fc),
             ]))
             continue
 
@@ -1029,7 +1083,7 @@ def render_actual_row(
         ct = _comment_text(fc) if fc else ""
         data_cells.append(html.Td(className=cell_cls, children=[
             html.Span(val or "—", className=disp_cls),
-            html.Div([html.Span("● ", className="chip-dot"), ct], className="cell-comment-chip", title=ct) if ct else None,
+            _render_chip(fc),
         ]))
 
     if is_submitted:
@@ -1098,7 +1152,7 @@ def render_thu_row(
             ct = _comment_text(fc) if fc else ""
             data_cells.append(html.Td(className="data-cell", children=[
                 html.Div(className="zero-cell", children=[html.Span("ZERO ✓", className="zero-label")]),
-                html.Div([html.Span("● ", className="chip-dot"), ct], className="cell-comment-chip", title=ct) if ct else None,
+                _render_chip(fc),
             ]))
             continue
 
@@ -1110,7 +1164,7 @@ def render_thu_row(
         ct = _comment_text(fc) if fc else ""
         data_cells.append(html.Td(className=cell_cls, children=[
             html.Span(val or "—", className=disp_cls),
-            html.Div([html.Span("● ", className="chip-dot"), ct], className="cell-comment-chip", title=ct) if ct else None,
+            _render_chip(fc),
         ]))
 
     if is_submitted:
