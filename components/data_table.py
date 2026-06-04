@@ -19,6 +19,7 @@ from data.schema import (
     ROWS, COLS_BY_PL, na_matrix, DEADLINES,
     COMMENT_PRESETS, COMMENT_PRESETS_WIP_OT,
     cols_below_threshold, wip_ot_below_threshold,
+    _is_zero_value,
 )
 
 _PRESET_LABELS: dict[str, str] = {
@@ -134,7 +135,12 @@ def render_friday_panel(
     submit_attempted: bool,
 ) -> html.Div:
     below_ids = set(cols_below_threshold(fri_values, mon_values, na_cols, cols))
-    zero_ids  = {c["id"] for c in cols if c["id"] not in na_cols and zero_flags.get(c["id"], False)}
+    zero_ids  = {
+        c["id"] for c in cols
+        if c["id"] not in na_cols and (
+            zero_flags.get(c["id"], False) or _is_zero_value(fri_values.get(c["id"]))
+        )
+    }
     required_ids = below_ids | zero_ids
 
     missing = [
@@ -155,7 +161,7 @@ def render_friday_panel(
         comment_required = is_below or is_zero
         comment_missing = submit_attempted and comment_required and cid in missing
         fc = fri_comments.get(cid, {"presets": [], "others": ""})
-        zf = is_zero
+        zf = zero_flags.get(cid, False)
         incomplete = submit_attempted and not zf and not str(fri_values.get(cid, "") or "").strip()
 
         card_cls = "fri-card"
@@ -303,7 +309,12 @@ def render_wip_ot_panel(
     submit_attempted: bool,
 ) -> html.Div:
     below_ids = set(wip_ot_below_threshold(wip_ot_values, na_cols, cols))
-    zero_ids  = {c["id"] for c in cols if c["id"] not in na_cols and zero_flags.get(c["id"], False)}
+    zero_ids  = {
+        c["id"] for c in cols
+        if c["id"] not in na_cols and (
+            zero_flags.get(c["id"], False) or _is_zero_value(wip_ot_values.get(c["id"]))
+        )
+    }
     required_ids = below_ids | zero_ids
 
     missing = [
@@ -325,7 +336,7 @@ def render_wip_ot_panel(
         comment_required = is_below or is_zero
         comment_missing = submit_attempted and comment_required and cid in missing
         fc = wip_ot_comments.get(cid, {"presets": [], "others": ""})
-        zf = is_zero
+        zf = zero_flags.get(cid, False)
         incomplete = submit_attempted and not zf and not str(wip_ot_values.get(cid, "") or "").strip()
 
         card_cls = "fri-card"
@@ -460,7 +471,12 @@ def render_actual_panel(
     submit_attempted: bool,
 ) -> html.Div:
     below_ids = set(cols_below_threshold(actual_values, mon_values, na_cols, cols))
-    zero_ids  = {c["id"] for c in cols if c["id"] not in na_cols and zero_flags.get(c["id"], False)}
+    zero_ids  = {
+        c["id"] for c in cols
+        if c["id"] not in na_cols and (
+            zero_flags.get(c["id"], False) or _is_zero_value(actual_values.get(c["id"]))
+        )
+    }
     required_ids = below_ids | zero_ids
 
     missing = [
@@ -482,7 +498,7 @@ def render_actual_panel(
         comment_required = is_below or is_zero
         comment_missing = submit_attempted and comment_required and cid in missing
         fc = actual_comments.get(cid, {"presets": [], "others": ""})
-        zf = is_zero
+        zf = zero_flags.get(cid, False)
         incomplete = submit_attempted and not zf and not str(actual_values.get(cid, "") or "").strip()
 
         card_cls = "fri-card"
@@ -631,7 +647,12 @@ def render_thu_panel(
     submit_attempted: bool,
 ) -> html.Div:
     below_ids = set(cols_below_threshold(thu_values, mon_values, na_cols, cols))
-    zero_ids  = {c["id"] for c in cols if c["id"] not in na_cols and zero_flags.get(c["id"], False)}
+    zero_ids  = {
+        c["id"] for c in cols
+        if c["id"] not in na_cols and (
+            zero_flags.get(c["id"], False) or _is_zero_value(thu_values.get(c["id"]))
+        )
+    }
     required_ids = below_ids | zero_ids
 
     missing = [
@@ -653,7 +674,7 @@ def render_thu_panel(
         comment_required = is_below or is_zero
         comment_missing = submit_attempted and comment_required and cid in missing
         fc = thu_comments.get(cid, {"presets": [], "others": ""})
-        zf = is_zero
+        zf = zero_flags.get(cid, False)
         incomplete = submit_attempted and not zf and not str(thu_values.get(cid, "") or "").strip()
 
         card_cls = "fri-card"

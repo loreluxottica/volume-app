@@ -323,10 +323,23 @@ def incomplete_cells(values: dict, zero_flags: dict, na_cols: list[str],
     return result
 
 
-def zero_cells_missing_comment(zero_flags: dict, comments: dict,
+def _is_zero_value(raw) -> bool:
+    """True if raw parses to numeric 0 (e.g. '0', '0.0', 0, 0.0). Blank/non-numeric = False."""
+    if raw is None:
+        return False
+    s = str(raw).strip()
+    if s == "":
+        return False
+    try:
+        return float(s) == 0.0
+    except (TypeError, ValueError):
+        return False
+
+
+def zero_cells_missing_comment(values: dict, zero_flags: dict, comments: dict,
                                na_cols: list[str], cols: list[dict]) -> list[str]:
     """
-    Column ids zero-confirmed but with no preset and no 'others' text.
+    Column ids that are zero (flag OR typed 0) and have no preset/'others' text.
     A zero entry must be justified — same rule used today for below-threshold cells.
     Shared by panel rendering and submit-time validation — single source.
     """
@@ -335,7 +348,7 @@ def zero_cells_missing_comment(zero_flags: dict, comments: dict,
         cid = col["id"]
         if cid in na_cols:
             continue
-        if not zero_flags.get(cid, False):
+        if not (zero_flags.get(cid, False) or _is_zero_value(values.get(cid))):
             continue
         c = comments.get(cid) or {}
         if c.get("presets") or (c.get("others") or "").strip():
