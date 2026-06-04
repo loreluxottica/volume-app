@@ -146,14 +146,14 @@ NA_WEARABLES_BY_SITE: dict[str, dict[str, list[str]]] = {
         "wip_ot":  ["inb_gtk", "inb_tri", "whls_gross", "ds_na", "repl_el", "meta"],
     },
     "TIJUANA": {
-        "py":      ["inb_gtk", "inb_tri", "rop_labs", "whls_gross", "whls_net", "retail", "ds_na", "ecom", "dummy", "repl_el", "meta"],
-        "siop":    ["inb_gtk", "inb_tri", "rop_labs", "whls_gross", "whls_net", "retail", "ds_na", "ecom", "dummy", "repl_el", "meta"],
-        "mon_frc": ["inb_gtk", "inb_tri", "rop_labs", "whls_gross", "whls_net", "retail", "ds_na", "ecom", "dummy", "repl_el", "meta"],
-        "thu_frc": ["inb_gtk", "inb_tri", "rop_labs", "whls_gross", "whls_net", "retail", "ds_na", "ecom", "dummy", "repl_el", "meta"],
-        "fri_frc": ["inb_gtk", "inb_tri", "rop_labs", "whls_gross", "whls_net", "retail", "ds_na", "ecom", "dummy", "repl_el", "meta"],
-        "actual":  ["inb_gtk", "inb_tri", "rop_labs", "whls_gross", "whls_net", "retail", "ds_na", "ecom", "dummy", "repl_el", "meta"],
-        "eow_wip": ["inb_gtk", "inb_tri", "rop_labs", "whls_gross", "whls_net", "retail", "ds_na", "ecom", "dummy", "repl_el", "meta"],
-        "wip_ot":  ["inb_gtk", "inb_tri", "rop_labs", "whls_gross", "whls_net", "retail", "ds_na", "ecom", "dummy", "repl_el", "meta"],
+        "py":      ["inb_gtk", "inb_tri", "rop_labs", "whls_gross", "whls_net", "ds_na", "ecom", "dummy", "repl_el", "meta"],
+        "siop":    ["inb_gtk", "inb_tri", "rop_labs", "whls_gross", "whls_net", "ds_na", "ecom", "dummy", "repl_el", "meta"],
+        "mon_frc": ["inb_gtk", "inb_tri", "rop_labs", "whls_gross", "whls_net", "ds_na", "ecom", "dummy", "repl_el", "meta"],
+        "thu_frc": ["inb_gtk", "inb_tri", "rop_labs", "whls_gross", "whls_net", "ds_na", "ecom", "dummy", "repl_el", "meta"],
+        "fri_frc": ["inb_gtk", "inb_tri", "rop_labs", "whls_gross", "whls_net", "ds_na", "ecom", "dummy", "repl_el", "meta"],
+        "actual":  ["inb_gtk", "inb_tri", "rop_labs", "whls_gross", "whls_net", "ds_na", "ecom", "dummy", "repl_el", "meta"],
+        "eow_wip": ["inb_gtk", "inb_tri", "rop_labs", "whls_gross", "whls_net", "ds_na", "ecom", "dummy", "repl_el", "meta"],
+        "wip_ot":  ["inb_gtk", "inb_tri", "rop_labs", "whls_gross", "whls_net", "ds_na", "ecom", "dummy", "repl_el", "meta"],
     },
     "DONGGUAN": {
         "py":      ["inb_gtk", "inb_tri", "rop_labs", "whls_gross", "whls_net", "retail", "ds_na", "ecom", "dummy", "repl_el", "meta"],
@@ -320,6 +320,27 @@ def incomplete_cells(values: dict, zero_flags: dict, na_cols: list[str],
         raw = values.get(cid, "")
         if raw is None or str(raw).strip() == "":
             result.append(cid)
+    return result
+
+
+def zero_cells_missing_comment(zero_flags: dict, comments: dict,
+                               na_cols: list[str], cols: list[dict]) -> list[str]:
+    """
+    Column ids zero-confirmed but with no preset and no 'others' text.
+    A zero entry must be justified — same rule used today for below-threshold cells.
+    Shared by panel rendering and submit-time validation — single source.
+    """
+    result: list[str] = []
+    for col in cols:
+        cid = col["id"]
+        if cid in na_cols:
+            continue
+        if not zero_flags.get(cid, False):
+            continue
+        c = comments.get(cid) or {}
+        if c.get("presets") or (c.get("others") or "").strip():
+            continue
+        result.append(cid)
     return result
 
 

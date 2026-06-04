@@ -134,9 +134,11 @@ def render_friday_panel(
     submit_attempted: bool,
 ) -> html.Div:
     below_ids = set(cols_below_threshold(fri_values, mon_values, na_cols, cols))
+    zero_ids  = {c["id"] for c in cols if c["id"] not in na_cols and zero_flags.get(c["id"], False)}
+    required_ids = below_ids | zero_ids
 
     missing = [
-        cid for cid in below_ids
+        cid for cid in required_ids
         if not (fri_comments.get(cid, {}).get("presets") or fri_comments.get(cid, {}).get("others", "").strip())
     ]
     has_errors = submit_attempted and bool(missing)
@@ -148,16 +150,18 @@ def render_friday_panel(
         if cid in na_cols:
             continue
 
-        is_below  = cid in below_ids
-        comment_missing = submit_attempted and is_below and cid in missing
+        is_below = cid in below_ids
+        is_zero  = cid in zero_ids
+        comment_required = is_below or is_zero
+        comment_missing = submit_attempted and comment_required and cid in missing
         fc = fri_comments.get(cid, {"presets": [], "others": ""})
-        zf = zero_flags.get(cid, False)
+        zf = is_zero
         incomplete = submit_attempted and not zf and not str(fri_values.get(cid, "") or "").strip()
 
         card_cls = "fri-card"
         if incomplete:
             card_cls += " fri-card-error"
-        elif is_below:
+        elif comment_required:
             card_cls += " fri-card-error" if comment_missing else " fri-card-warn"
 
         input_cls = "fri-num-input"
@@ -203,11 +207,14 @@ def render_friday_panel(
         lbl_cls = "comment-label"
         if comment_missing:
             lbl_cls += " comment-label-error"
+        if comment_missing:
+            lbl_text = "⚠ Comment required"
+        elif is_zero and not is_below:
+            lbl_text = "Reason zero (no shipments)"
+        else:
+            lbl_text = "Reason for variance"
         comment_children = [
-            html.Div(
-                "⚠ Comment required" if comment_missing else "Reason for variance",
-                className=lbl_cls,
-            ),
+            html.Div(lbl_text, className=lbl_cls),
             dcc.Checklist(
                 id={"type": "fri-presets", "col": cid},
                 options=[{
@@ -234,7 +241,7 @@ def render_friday_panel(
             id={"type": "fri-comment-section", "col": cid},
             className="comment-section",
             children=comment_children,
-            style={} if is_below else {"display": "none"},
+            style={} if comment_required else {"display": "none"},
         ))
 
         cards.append(html.Div(className=card_cls, children=[c for c in card_children if c is not None]))
@@ -296,9 +303,11 @@ def render_wip_ot_panel(
     submit_attempted: bool,
 ) -> html.Div:
     below_ids = set(wip_ot_below_threshold(wip_ot_values, na_cols, cols))
+    zero_ids  = {c["id"] for c in cols if c["id"] not in na_cols and zero_flags.get(c["id"], False)}
+    required_ids = below_ids | zero_ids
 
     missing = [
-        cid for cid in below_ids
+        cid for cid in required_ids
         if not (wip_ot_comments.get(cid, {}).get("presets")
                 or wip_ot_comments.get(cid, {}).get("others", "").strip())
     ]
@@ -311,16 +320,18 @@ def render_wip_ot_panel(
         if cid in na_cols:
             continue
 
-        is_below  = cid in below_ids
-        comment_missing = submit_attempted and is_below and cid in missing
+        is_below = cid in below_ids
+        is_zero  = cid in zero_ids
+        comment_required = is_below or is_zero
+        comment_missing = submit_attempted and comment_required and cid in missing
         fc = wip_ot_comments.get(cid, {"presets": [], "others": ""})
-        zf = zero_flags.get(cid, False)
+        zf = is_zero
         incomplete = submit_attempted and not zf and not str(wip_ot_values.get(cid, "") or "").strip()
 
         card_cls = "fri-card"
         if incomplete:
             card_cls += " fri-card-error"
-        elif is_below:
+        elif comment_required:
             card_cls += " fri-card-error" if comment_missing else " fri-card-warn"
 
         input_cls = "fri-num-input"
@@ -361,11 +372,14 @@ def render_wip_ot_panel(
         lbl_cls = "comment-label"
         if comment_missing:
             lbl_cls += " comment-label-error"
+        if comment_missing:
+            lbl_text = "⚠ Comment required"
+        elif is_zero and not is_below:
+            lbl_text = "Reason zero (no shipments)"
+        else:
+            lbl_text = "Reason for WIP OT ≤ 90%"
         comment_children = [
-            html.Div(
-                "⚠ Comment required" if comment_missing else "Reason for WIP OT ≤ 90%",
-                className=lbl_cls,
-            ),
+            html.Div(lbl_text, className=lbl_cls),
             dcc.Checklist(
                 id={"type": "wip-ot-presets", "col": cid},
                 options=[{"label": p["label"], "value": p["id"]} for p in COMMENT_PRESETS_WIP_OT],
@@ -383,7 +397,7 @@ def render_wip_ot_panel(
             id={"type": "wip-ot-comment-section", "col": cid},
             className="comment-section",
             children=comment_children,
-            style={} if is_below else {"display": "none"},
+            style={} if comment_required else {"display": "none"},
         ))
 
         cards.append(html.Div(className=card_cls, children=[c for c in card_children if c is not None]))
@@ -446,9 +460,11 @@ def render_actual_panel(
     submit_attempted: bool,
 ) -> html.Div:
     below_ids = set(cols_below_threshold(actual_values, mon_values, na_cols, cols))
+    zero_ids  = {c["id"] for c in cols if c["id"] not in na_cols and zero_flags.get(c["id"], False)}
+    required_ids = below_ids | zero_ids
 
     missing = [
-        cid for cid in below_ids
+        cid for cid in required_ids
         if not (actual_comments.get(cid, {}).get("presets")
                 or actual_comments.get(cid, {}).get("others", "").strip())
     ]
@@ -461,16 +477,18 @@ def render_actual_panel(
         if cid in na_cols:
             continue
 
-        is_below  = cid in below_ids
-        comment_missing = submit_attempted and is_below and cid in missing
+        is_below = cid in below_ids
+        is_zero  = cid in zero_ids
+        comment_required = is_below or is_zero
+        comment_missing = submit_attempted and comment_required and cid in missing
         fc = actual_comments.get(cid, {"presets": [], "others": ""})
-        zf = zero_flags.get(cid, False)
+        zf = is_zero
         incomplete = submit_attempted and not zf and not str(actual_values.get(cid, "") or "").strip()
 
         card_cls = "fri-card"
         if incomplete:
             card_cls += " fri-card-error"
-        elif is_below:
+        elif comment_required:
             card_cls += " fri-card-error" if comment_missing else " fri-card-warn"
 
         input_cls = "fri-num-input"
@@ -516,11 +534,14 @@ def render_actual_panel(
         lbl_cls = "comment-label"
         if comment_missing:
             lbl_cls += " comment-label-error"
+        if comment_missing:
+            lbl_text = "⚠ Comment required"
+        elif is_zero and not is_below:
+            lbl_text = "Reason zero (no shipments)"
+        else:
+            lbl_text = "Reason for variance"
         comment_children = [
-            html.Div(
-                "⚠ Comment required" if comment_missing else "Reason for variance",
-                className=lbl_cls,
-            ),
+            html.Div(lbl_text, className=lbl_cls),
             dcc.Checklist(
                 id={"type": "actual-presets", "col": cid},
                 options=[{
@@ -547,7 +568,7 @@ def render_actual_panel(
             id={"type": "actual-comment-section", "col": cid},
             className="comment-section",
             children=comment_children,
-            style={} if is_below else {"display": "none"},
+            style={} if comment_required else {"display": "none"},
         ))
 
         cards.append(html.Div(className=card_cls, children=[c for c in card_children if c is not None]))
@@ -610,9 +631,11 @@ def render_thu_panel(
     submit_attempted: bool,
 ) -> html.Div:
     below_ids = set(cols_below_threshold(thu_values, mon_values, na_cols, cols))
+    zero_ids  = {c["id"] for c in cols if c["id"] not in na_cols and zero_flags.get(c["id"], False)}
+    required_ids = below_ids | zero_ids
 
     missing = [
-        cid for cid in below_ids
+        cid for cid in required_ids
         if not (thu_comments.get(cid, {}).get("presets")
                 or thu_comments.get(cid, {}).get("others", "").strip())
     ]
@@ -625,16 +648,18 @@ def render_thu_panel(
         if cid in na_cols:
             continue
 
-        is_below  = cid in below_ids
-        comment_missing = submit_attempted and is_below and cid in missing
+        is_below = cid in below_ids
+        is_zero  = cid in zero_ids
+        comment_required = is_below or is_zero
+        comment_missing = submit_attempted and comment_required and cid in missing
         fc = thu_comments.get(cid, {"presets": [], "others": ""})
-        zf = zero_flags.get(cid, False)
+        zf = is_zero
         incomplete = submit_attempted and not zf and not str(thu_values.get(cid, "") or "").strip()
 
         card_cls = "fri-card"
         if incomplete:
             card_cls += " fri-card-error"
-        elif is_below:
+        elif comment_required:
             card_cls += " fri-card-error" if comment_missing else " fri-card-warn"
 
         input_cls = "fri-num-input"
@@ -680,11 +705,14 @@ def render_thu_panel(
         lbl_cls = "comment-label"
         if comment_missing:
             lbl_cls += " comment-label-error"
+        if comment_missing:
+            lbl_text = "⚠ Comment required"
+        elif is_zero and not is_below:
+            lbl_text = "Reason zero (no shipments)"
+        else:
+            lbl_text = "Reason for variance"
         comment_children = [
-            html.Div(
-                "⚠ Comment required" if comment_missing else "Reason for variance",
-                className=lbl_cls,
-            ),
+            html.Div(lbl_text, className=lbl_cls),
             dcc.Checklist(
                 id={"type": "thu-presets", "col": cid},
                 options=[{
@@ -711,7 +739,7 @@ def render_thu_panel(
             id={"type": "thu-comment-section", "col": cid},
             className="comment-section",
             children=comment_children,
-            style={} if is_below else {"display": "none"},
+            style={} if comment_required else {"display": "none"},
         ))
 
         cards.append(html.Div(className=card_cls, children=[c for c in card_children if c is not None]))

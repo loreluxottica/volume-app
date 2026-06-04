@@ -25,6 +25,7 @@ from data import cache, db
 from data.schema import (
     ROWS, COLS_BY_PL, na_matrix, SITES,
     cols_below_threshold, wip_ot_below_threshold, incomplete_cells,
+    zero_cells_missing_comment,
 )
 
 # ── App init ──────────────────────────────────────────────────────────────────
@@ -1111,18 +1112,22 @@ def submit_fri(n1, n2, app_data: dict, form_data: dict):
         return _app_part(state), f"⚠ Fill or confirm zero for all cells: {', '.join(blank_labels)}"
 
     # A Friday cell that dropped below threshold vs Monday needs a comment.
+    # A zero-confirmed cell also needs a justification comment.
+    zf_row = state["zero_flags"][site][pl]["fri_frc"]
     below_ids = cols_below_threshold(vals, mon_vals, na_cols, cols)
-    missing = [
+    zero_missing = zero_cells_missing_comment(zf_row, fc, na_cols, cols)
+    missing_below = [
         cid for cid in below_ids
         if not (fc.get(cid, {}).get("presets") or fc.get(cid, {}).get("others", "").strip())
     ]
+    missing = list(dict.fromkeys(missing_below + zero_missing))
     if missing:
         state["submit_attempted"] = True
         missing_labels = [c["label"] for c in cols if c["id"] in missing]
         return _app_part(state), f"⚠ Comment required: {', '.join(missing_labels)}"
 
-    # Drop stale comments for cells no longer below threshold.
-    keep = set(below_ids)
+    # Drop stale comments for cells no longer below threshold and not zero-flagged.
+    keep = set(below_ids) | {cid for cid in zf_row if zf_row.get(cid)}
     state["fri_comments"][site][pl] = {
         cid: fc_entry for cid, fc_entry in state["fri_comments"][site][pl].items()
         if cid in keep
@@ -1243,18 +1248,22 @@ def submit_wip_ot(n1, n2, app_data: dict, form_data: dict):
         return _app_part(state), f"⚠ Fill or confirm zero for all cells: {', '.join(blank_labels)}"
 
     # Any column at or below 90% needs a comment.
+    # A zero-confirmed cell also needs a justification comment.
+    zf_row = state["zero_flags"][site][pl]["wip_ot"]
     below_ids = wip_ot_below_threshold(vals, na_cols, cols)
-    missing = [
+    zero_missing = zero_cells_missing_comment(zf_row, woc, na_cols, cols)
+    missing_below = [
         cid for cid in below_ids
         if not (woc.get(cid, {}).get("presets") or woc.get(cid, {}).get("others", "").strip())
     ]
+    missing = list(dict.fromkeys(missing_below + zero_missing))
     if missing:
         state["submit_attempted"] = True
         missing_labels = [c["label"] for c in cols if c["id"] in missing]
         return _app_part(state), f"⚠ Comment required: {', '.join(missing_labels)}"
 
-    # Drop stale comments for cells no longer below threshold.
-    keep = set(below_ids)
+    # Drop stale comments for cells no longer below threshold and not zero-flagged.
+    keep = set(below_ids) | {cid for cid in zf_row if zf_row.get(cid)}
     state["wip_ot_comments"][site][pl] = {
         cid: fc_entry for cid, fc_entry in state["wip_ot_comments"][site][pl].items()
         if cid in keep
@@ -1376,18 +1385,22 @@ def submit_actual(n1, n2, app_data: dict, form_data: dict):
         return _app_part(state), f"⚠ Fill or confirm zero for all cells: {', '.join(blank_labels)}"
 
     # An Actual cell that dropped below threshold vs Monday needs a comment.
+    # A zero-confirmed cell also needs a justification comment.
+    zf_row = state["zero_flags"][site][pl]["actual"]
     below_ids = cols_below_threshold(vals, mon_vals, na_cols, cols)
-    missing = [
+    zero_missing = zero_cells_missing_comment(zf_row, ac, na_cols, cols)
+    missing_below = [
         cid for cid in below_ids
         if not (ac.get(cid, {}).get("presets") or ac.get(cid, {}).get("others", "").strip())
     ]
+    missing = list(dict.fromkeys(missing_below + zero_missing))
     if missing:
         state["submit_attempted"] = True
         missing_labels = [c["label"] for c in cols if c["id"] in missing]
         return _app_part(state), f"⚠ Comment required: {', '.join(missing_labels)}"
 
-    # Drop stale comments for cells no longer below threshold.
-    keep = set(below_ids)
+    # Drop stale comments for cells no longer below threshold and not zero-flagged.
+    keep = set(below_ids) | {cid for cid in zf_row if zf_row.get(cid)}
     state["actual_comments"][site][pl] = {
         cid: fc_entry for cid, fc_entry in state["actual_comments"][site][pl].items()
         if cid in keep
@@ -1509,18 +1522,22 @@ def submit_thu(n1, n2, app_data: dict, form_data: dict):
         return _app_part(state), f"⚠ Fill or confirm zero for all cells: {', '.join(blank_labels)}"
 
     # A Thursday cell that dropped below threshold vs Monday needs a comment.
+    # A zero-confirmed cell also needs a justification comment.
+    zf_row = state["zero_flags"][site][pl]["thu_frc"]
     below_ids = cols_below_threshold(vals, mon_vals, na_cols, cols)
-    missing = [
+    zero_missing = zero_cells_missing_comment(zf_row, tc, na_cols, cols)
+    missing_below = [
         cid for cid in below_ids
         if not (tc.get(cid, {}).get("presets") or tc.get(cid, {}).get("others", "").strip())
     ]
+    missing = list(dict.fromkeys(missing_below + zero_missing))
     if missing:
         state["submit_attempted"] = True
         missing_labels = [c["label"] for c in cols if c["id"] in missing]
         return _app_part(state), f"⚠ Comment required: {', '.join(missing_labels)}"
 
-    # Drop stale comments for cells no longer below threshold.
-    keep = set(below_ids)
+    # Drop stale comments for cells no longer below threshold and not zero-flagged.
+    keep = set(below_ids) | {cid for cid in zf_row if zf_row.get(cid)}
     state["thu_comments"][site][pl] = {
         cid: fc_entry for cid, fc_entry in state["thu_comments"][site][pl].items()
         if cid in keep
