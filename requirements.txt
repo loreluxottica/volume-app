@@ -3,5 +3,6 @@ dash-core-components>=2.0.0
 dash-html-components>=2.0.0
 plotly>=5.22.0
 pandas>=2.0.0
-databricks-sql-connector>=3.3.0
+psycopg2-binary>=2.9.0
+databricks-sdk>=0.30.0
 gunicorn>=22.0.0

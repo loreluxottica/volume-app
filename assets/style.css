@@ -103,15 +103,8 @@ body {
 .field-group { display: flex; flex-direction: column; gap: 4px; }
 .field-label { font-size: 9px; letter-spacing: 0.11em; text-transform: uppercase; color: var(--text-3); font-weight: 600; }
 
-/* Site selector */
-.site-select {
-  font-family: var(--font);
-  font-size: 13px; font-weight: 500;
-  border: 1px solid var(--border-strong); border-radius: var(--radius);
-  padding: 5px 10px; background: var(--surface); color: var(--text);
-  cursor: pointer; outline: none; min-width: 200px;
-}
-.site-select:focus { border-color: var(--blue); }
+/* Site selector — dcc.Dropdown draws its own control box; just set the font */
+.site-dropdown { font-family: var(--font); font-size: 13px; font-weight: 500; }
 
 /* Week badge */
 .week-row { display: flex; align-items: center; gap: 8px; }
@@ -168,7 +161,9 @@ body {
 /* ── TABLE ────────────────────────────────────────────── */
 .table-wrap { overflow-x: auto; }
 
-.vol-table { width: 100%; border-collapse: collapse; }
+/* table-layout:fixed + <colgroup> → data columns share the width equally
+   (uniform), and width:100% makes the table fill the screen. */
+.vol-table { border-collapse: collapse; table-layout: fixed; width: 100%; min-width: 1180px; }
 
 .th-section {
   background: var(--navy); color: var(--navy-text2);
@@ -213,8 +208,28 @@ body {
 }
 .data-cell-na {
   background: repeating-linear-gradient(
-    45deg, rgba(0,0,0,0.04) 0, rgba(0,0,0,0.04) 3px, transparent 3px, transparent 8px
+    45deg, rgba(0,0,0,0.07) 0, rgba(0,0,0,0.07) 3px, transparent 3px, transparent 8px
   );
+}
+/* Keep the N/A hatching visible after the row is saved (draft) or submitted —
+   the .is-draft/.is-submitted td tint would otherwise cover it. The hatch is
+   layered over the row tint so the cell still reads as part of that row. */
+.is-draft td.data-cell-na {
+  background:
+    repeating-linear-gradient(45deg, rgba(0,0,0,0.07) 0, rgba(0,0,0,0.07) 3px, transparent 3px, transparent 8px),
+    rgba(155,109,209,0.03) !important;
+}
+.is-submitted td.data-cell-na {
+  background:
+    repeating-linear-gradient(45deg, rgba(0,0,0,0.07) 0, rgba(0,0,0,0.07) 3px, transparent 3px, transparent 8px),
+    rgba(55,138,221,0.03) !important;
+}
+/* Keep the N/A hatching on row hover too — the .data-row:hover tint would
+   otherwise cover it. */
+.data-row:hover td.data-cell-na {
+  background:
+    repeating-linear-gradient(45deg, rgba(0,0,0,0.07) 0, rgba(0,0,0,0.07) 3px, transparent 3px, transparent 8px),
+    rgba(0,0,0,0.013);
 }
 .data-cell-below { background: var(--red-cell); }
 
@@ -236,6 +251,22 @@ body {
 .fri-display { font-size: 12px; font-family: var(--mono); color: var(--text-2); text-align: right; padding: 4px 5px; display: block; }
 .fri-display-below { color: #8b2e1a; font-weight: 600; }
 .fri-display-empty { color: var(--text-3); }
+.chip-dot { font-style: normal; }
+.cell-comment-chip {
+  font-size: 9px;
+  color: var(--text-2);
+  margin-top: 3px;
+  padding: 2px 4px;
+  max-width: 160px;
+  cursor: default;
+  background: var(--surface2);
+  border-radius: 3px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.chip-line { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chip-line-other { font-style: italic; color: var(--text-3); }
 
 /* Zero flag badge */
 .zero-cell { display: flex; flex-direction: column; align-items: flex-end; padding: 3px 5px; gap: 2px; }
@@ -266,6 +297,8 @@ body {
 .btn-fri:hover, .btn-fri-open { background: var(--blue-bg); }
 .btn-save-all  { border-color: var(--border-strong); color: var(--text-2); background: var(--surface); }
 .btn-save-all:hover { background: var(--surface2); }
+.btn-danger    { border-color: var(--red-border); color: #b3261e; background: var(--red-bg); font-weight: 600; }
+.btn-danger:hover { background: #fbe3e0; }
 .btn-submit-all { border-color: var(--green); color: var(--green); background: var(--green-bg); }
 .btn-submit-all:hover { background: var(--green-hover); }
 
@@ -321,6 +354,12 @@ body {
 .fri-num-input::-webkit-inner-spin-button { -webkit-appearance: none; }
 .fri-num-input:focus { border-color: var(--blue); box-shadow: 0 0 0 2px rgba(55,138,221,0.15); }
 .fri-num-input-below { border-color: var(--red-border); color: #8b2e1a; }
+/* Blank required cell flagged after a submit attempt (BBP §6.4) */
+.fri-num-input-incomplete {
+  border-color: var(--red-border);
+  background: var(--red-bg);
+  box-shadow: 0 0 0 2px rgba(200,55,55,0.12);
+}
 
 /* Comment section */
 .comment-section { display: flex; flex-direction: column; gap: 5px; }

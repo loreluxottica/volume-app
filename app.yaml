@@ -1,5 +1,18 @@
 command:
   - gunicorn
-  - app:server
+  - "app:server"
   - -c
   - gunicorn.conf.py
+
+resources:
+  - name: database
+    postgres:
+      branch: projects/volume-data-entry/branches/production
+      database: projects/volume-data-entry/branches/production/databases/databricks-postgres
+      permission: CAN_CONNECT_AND_CREATE
+
+env:
+  - name: DATABRICKS_LAKEBASE_URL
+    value: "postgresql://4bb083f4-c641-4be4-be26-1a3c8d247255@ep-empty-mode-e2j49wxy.database.westeurope.azuredatabricks.net/databricks_postgres?sslmode=require"
+  - name: LAKEBASE_SCHEMA
+    value: volume_data_entry
