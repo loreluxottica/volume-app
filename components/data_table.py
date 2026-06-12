@@ -16,7 +16,7 @@ from typing import Any
 from dash import html, dcc
 
 from data.schema import (
-    ROWS, COLS_BY_PL, na_matrix, DEADLINES,
+    ROWS, COLS_BY_PL, na_matrix, deadlines_for,
     COMMENT_PRESETS, COMMENT_PRESETS_WIP_OT,
     cols_below_threshold, wip_ot_below_threshold,
     _is_zero_value,
@@ -43,11 +43,16 @@ def _comment_text(fc: dict) -> str:
     return "; ".join(parts)
 
 
-def _render_chip(fc: dict | None):
-    """Vertical-stacked chip: one line per preset + one for 'others'."""
-    if not fc:
-        return None
+def _render_chip(fc: dict | None, no_ship: bool = False):
+    """Vertical-stacked chip: one line per preset + one for 'others'.
+
+    no_ship=True renders a leading "No shipments" line (confirm-zero cells),
+    followed by any free-text the user added.
+    """
+    fc = fc or {}
     lines = []
+    if no_ship:
+        lines.append(html.Div("No shipments", className="chip-line"))
     for pid in fc.get("presets", []):
         meta = _PRESET_META.get(pid, {"label": pid, "color": "#ef9f27", "icon": "dot"})
         glyph = "★" if meta.get("icon") == "star" else "●"
@@ -61,7 +66,9 @@ def _render_chip(fc: dict | None):
         lines.append(html.Div(other, className="chip-line chip-line-other"))
     if not lines:
         return None
-    return html.Div(lines, className="cell-comment-chip", title=_comment_text(fc))
+    title = "No shipments" + ("; " + _comment_text(fc) if no_ship and _comment_text(fc) else "") \
+            if no_ship else _comment_text(fc)
+    return html.Div(lines, className="cell-comment-chip", title=title)
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -143,9 +150,12 @@ def render_friday_panel(
     }
     required_ids = below_ids | zero_ids
 
+    # Confirm-zero flag is sufficient justification — never "missing".
+    flagged = {c["id"] for c in cols if zero_flags.get(c["id"], False)}
     missing = [
         cid for cid in required_ids
-        if not (fri_comments.get(cid, {}).get("presets") or fri_comments.get(cid, {}).get("others", "").strip())
+        if cid not in flagged
+        and not (fri_comments.get(cid, {}).get("presets") or fri_comments.get(cid, {}).get("others", "").strip())
     ]
     has_errors = submit_attempted and bool(missing)
     warn_cols  = [c["label"] for c in cols if c["id"] in below_ids]
@@ -219,9 +229,12 @@ def render_friday_panel(
             lbl_text = "Reason zero (no shipments)"
         else:
             lbl_text = "Reason for variance"
-        comment_children = [
-            html.Div(lbl_text, className=lbl_cls),
-            dcc.Checklist(
+        # Zero (no shipments): flag is sufficient — show only an optional
+        # free-text box, no reason presets.
+        zero_only = is_zero and not is_below
+        comment_children = [html.Div(lbl_text, className=lbl_cls)]
+        if not zero_only:
+            comment_children.append(dcc.Checklist(
                 id={"type": "fri-presets", "col": cid},
                 options=[{
                     "label": html.Span([
@@ -235,14 +248,13 @@ def render_friday_panel(
                 } for p in COMMENT_PRESETS],
                 value=fc.get("presets", []),
                 className="preset-checklist",
-            ),
-            dcc.Textarea(
-                id={"type": "fri-others", "col": cid},
-                placeholder="Others (optional)…",
-                value=fc.get("others", ""),
-                className="others-input",
-            ),
-        ]
+            ))
+        comment_children.append(dcc.Textarea(
+            id={"type": "fri-others", "col": cid},
+            placeholder="Reason (optional)…" if zero_only else "Others (optional)…",
+            value=fc.get("others", ""),
+            className="others-input",
+        ))
         card_children.append(html.Div(
             id={"type": "fri-comment-section", "col": cid},
             className="comment-section",
@@ -479,10 +491,13 @@ def render_actual_panel(
     }
     required_ids = below_ids | zero_ids
 
+    # Confirm-zero flag is sufficient justification — never "missing".
+    flagged = {c["id"] for c in cols if zero_flags.get(c["id"], False)}
     missing = [
         cid for cid in required_ids
-        if not (actual_comments.get(cid, {}).get("presets")
-                or actual_comments.get(cid, {}).get("others", "").strip())
+        if cid not in flagged
+        and not (actual_comments.get(cid, {}).get("presets")
+                 or actual_comments.get(cid, {}).get("others", "").strip())
     ]
     has_errors = submit_attempted and bool(missing)
     warn_cols  = [c["label"] for c in cols if c["id"] in below_ids]
@@ -556,9 +571,12 @@ def render_actual_panel(
             lbl_text = "Reason zero (no shipments)"
         else:
             lbl_text = "Reason for variance"
-        comment_children = [
-            html.Div(lbl_text, className=lbl_cls),
-            dcc.Checklist(
+        # Zero (no shipments): flag is sufficient — show only an optional
+        # free-text box, no reason presets.
+        zero_only = is_zero and not is_below
+        comment_children = [html.Div(lbl_text, className=lbl_cls)]
+        if not zero_only:
+            comment_children.append(dcc.Checklist(
                 id={"type": "actual-presets", "col": cid},
                 options=[{
                     "label": html.Span([
@@ -572,14 +590,13 @@ def render_actual_panel(
                 } for p in COMMENT_PRESETS],
                 value=fc.get("presets", []),
                 className="preset-checklist",
-            ),
-            dcc.Textarea(
-                id={"type": "actual-others", "col": cid},
-                placeholder="Others (optional)…",
-                value=fc.get("others", ""),
-                className="others-input",
-            ),
-        ]
+            ))
+        comment_children.append(dcc.Textarea(
+            id={"type": "actual-others", "col": cid},
+            placeholder="Reason (optional)…" if zero_only else "Others (optional)…",
+            value=fc.get("others", ""),
+            className="others-input",
+        ))
         card_children.append(html.Div(
             id={"type": "actual-comment-section", "col": cid},
             className="comment-section",
@@ -655,10 +672,13 @@ def render_thu_panel(
     }
     required_ids = below_ids | zero_ids
 
+    # Confirm-zero flag is sufficient justification — never "missing".
+    flagged = {c["id"] for c in cols if zero_flags.get(c["id"], False)}
     missing = [
         cid for cid in required_ids
-        if not (thu_comments.get(cid, {}).get("presets")
-                or thu_comments.get(cid, {}).get("others", "").strip())
+        if cid not in flagged
+        and not (thu_comments.get(cid, {}).get("presets")
+                 or thu_comments.get(cid, {}).get("others", "").strip())
     ]
     has_errors = submit_attempted and bool(missing)
     warn_cols  = [c["label"] for c in cols if c["id"] in below_ids]
@@ -732,9 +752,12 @@ def render_thu_panel(
             lbl_text = "Reason zero (no shipments)"
         else:
             lbl_text = "Reason for variance"
-        comment_children = [
-            html.Div(lbl_text, className=lbl_cls),
-            dcc.Checklist(
+        # Zero (no shipments): flag is sufficient — show only an optional
+        # free-text box, no reason presets.
+        zero_only = is_zero and not is_below
+        comment_children = [html.Div(lbl_text, className=lbl_cls)]
+        if not zero_only:
+            comment_children.append(dcc.Checklist(
                 id={"type": "thu-presets", "col": cid},
                 options=[{
                     "label": html.Span([
@@ -748,14 +771,13 @@ def render_thu_panel(
                 } for p in COMMENT_PRESETS],
                 value=fc.get("presets", []),
                 className="preset-checklist",
-            ),
-            dcc.Textarea(
-                id={"type": "thu-others", "col": cid},
-                placeholder="Others (optional)…",
-                value=fc.get("others", ""),
-                className="others-input",
-            ),
-        ]
+            ))
+        comment_children.append(dcc.Textarea(
+            id={"type": "thu-others", "col": cid},
+            placeholder="Reason (optional)…" if zero_only else "Others (optional)…",
+            value=fc.get("others", ""),
+            className="others-input",
+        ))
         card_children.append(html.Div(
             id={"type": "thu-comment-section", "col": cid},
             className="comment-section",
@@ -959,7 +981,7 @@ def render_friday_row(
             ct = _comment_text(fc) if fc else ""
             data_cells.append(html.Td(className="data-cell", children=[
                 html.Div(className="zero-cell", children=[html.Span("ZERO ✓", className="zero-label")]),
-                _render_chip(fc),
+                _render_chip(fc, no_ship=True),
             ]))
             continue
 
@@ -1120,7 +1142,7 @@ def render_actual_row(
             ct = _comment_text(fc) if fc else ""
             data_cells.append(html.Td(className="data-cell", children=[
                 html.Div(className="zero-cell", children=[html.Span("ZERO ✓", className="zero-label")]),
-                _render_chip(fc),
+                _render_chip(fc, no_ship=True),
             ]))
             continue
 
@@ -1201,7 +1223,7 @@ def render_thu_row(
             ct = _comment_text(fc) if fc else ""
             data_cells.append(html.Td(className="data-cell", children=[
                 html.Div(className="zero-cell", children=[html.Span("ZERO ✓", className="zero-label")]),
-                _render_chip(fc),
+                _render_chip(fc, no_ship=True),
             ]))
             continue
 
@@ -1269,7 +1291,7 @@ def render_data_table(
 ) -> html.Div:
     cols   = COLS_BY_PL[current_pl]
     na_map = na_matrix(current_site, current_pl)
-    dl     = DEADLINES.get(current_site, {})   # GLOBAL has no deadlines
+    dl     = deadlines_for(current_site, current_pl)   # GLOBAL has no deadlines
     is_global = current_site == "GLOBAL"
 
     thead_rows = render_table_header(cols, current_site, current_pl)
