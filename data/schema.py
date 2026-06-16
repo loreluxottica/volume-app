@@ -240,6 +240,19 @@ DEADLINES: dict[str, dict[str, str]] = {
     "SUMARE":   {"py": "Wed EOD",   "siop": "Wed EOD",   "mon_frc": "Wed EOD",   "thu_frc": "Wed EOD",   "fri_frc": "Fri 10:00", "actual": "Next Mon 11:00", "eow_wip": "Next Mon 11:00", "wip_ot": "Next Mon 11:00"},
 }
 
+# Per-(site, product line) deadline overrides — applied on top of DEADLINES.
+DEADLINE_OVERRIDES: dict[tuple[str, str], dict[str, str]] = {
+    ("SEDICO", "WEARABLES"): {"mon_frc": "Tue 18:00"},
+}
+
+
+def deadlines_for(site: str, pl: str) -> dict[str, str]:
+    """Deadline schedule for a site, with product-line overrides merged in."""
+    d = dict(DEADLINES.get(site, {}))
+    d.update(DEADLINE_OVERRIDES.get((site, pl), {}))
+    return d
+
+
 SITES = list(DEADLINES.keys())
 
 SITE_OWNERS = {
@@ -337,16 +350,25 @@ def _is_zero_value(raw) -> bool:
 
 
 def zero_cells_missing_comment(values: dict, zero_flags: dict, comments: dict,
-                               na_cols: list[str], cols: list[dict]) -> list[str]:
+                               na_cols: list[str], cols: list[dict],
+                               flag_is_sufficient: bool = False) -> list[str]:
     """
     Column ids that are zero (flag OR typed 0) and have no preset/'others' text.
     A zero entry must be justified — same rule used today for below-threshold cells.
     Shared by panel rendering and submit-time validation — single source.
+
+    flag_is_sufficient=True (shipment FRC panels): a confirm-zero flag alone is
+    enough ("No shipments") and never counts as missing; only a typed-0 without
+    the flag still needs a comment. WIP OT keeps the stricter default.
     """
     result: list[str] = []
     for col in cols:
         cid = col["id"]
         if cid in na_cols:
+            continue
+        if flag_is_sufficient and zero_flags.get(cid, False):
+            # Confirm-zero flag is sufficient justification ("No shipments");
+            # a free-text comment is optional.
             continue
         if not (zero_flags.get(cid, False) or _is_zero_value(values.get(cid))):
             continue

@@ -1115,7 +1115,7 @@ def submit_fri(n1, n2, app_data: dict, form_data: dict):
     # A zero-confirmed cell also needs a justification comment.
     zf_row = state["zero_flags"][site][pl]["fri_frc"]
     below_ids = cols_below_threshold(vals, mon_vals, na_cols, cols)
-    zero_missing = zero_cells_missing_comment(vals, zf_row, fc, na_cols, cols)
+    zero_missing = zero_cells_missing_comment(vals, zf_row, fc, na_cols, cols, flag_is_sufficient=True)
     missing_below = [
         cid for cid in below_ids
         if not (fc.get(cid, {}).get("presets") or fc.get(cid, {}).get("others", "").strip())
@@ -1392,7 +1392,7 @@ def submit_actual(n1, n2, app_data: dict, form_data: dict):
     # A zero-confirmed cell also needs a justification comment.
     zf_row = state["zero_flags"][site][pl]["actual"]
     below_ids = cols_below_threshold(vals, mon_vals, na_cols, cols)
-    zero_missing = zero_cells_missing_comment(vals, zf_row, ac, na_cols, cols)
+    zero_missing = zero_cells_missing_comment(vals, zf_row, ac, na_cols, cols, flag_is_sufficient=True)
     missing_below = [
         cid for cid in below_ids
         if not (ac.get(cid, {}).get("presets") or ac.get(cid, {}).get("others", "").strip())
@@ -1531,7 +1531,7 @@ def submit_thu(n1, n2, app_data: dict, form_data: dict):
     # A zero-confirmed cell also needs a justification comment.
     zf_row = state["zero_flags"][site][pl]["thu_frc"]
     below_ids = cols_below_threshold(vals, mon_vals, na_cols, cols)
-    zero_missing = zero_cells_missing_comment(vals, zf_row, tc, na_cols, cols)
+    zero_missing = zero_cells_missing_comment(vals, zf_row, tc, na_cols, cols, flag_is_sufficient=True)
     missing_below = [
         cid for cid in below_ids
         if not (tc.get(cid, {}).get("presets") or tc.get(cid, {}).get("others", "").strip())

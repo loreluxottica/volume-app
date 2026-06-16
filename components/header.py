@@ -5,7 +5,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 from __future__ import annotations
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from dash import html, dcc
 
@@ -42,6 +42,11 @@ def render_app_header(
     months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
     today_str = f"{days[now.weekday()]} {now.day} {months[now.month-1]} {now.year}"
 
+    # Reporting week is the prior ISO week; WK = (current ISO week) - 1.
+    # Subtract 7 days first so week 1 wraps to last year's 52/53 correctly.
+    iso_week    = now.isocalendar()[1]
+    report_week = (now - timedelta(days=7)).isocalendar()[1]
+
     header = html.Div(className="app-header", children=[
         html.Div(className="header-left", children=[
 
@@ -68,7 +73,7 @@ def render_app_header(
             html.Div(className="field-group", children=[
                 html.Div("Current week", className="field-label"),
                 html.Div(className="week-row", children=[
-                    html.Span(f"WK {week_id} | ISO WK {week_id}", className="week-badge"),
+                    html.Span(f"WK {report_week} | ISO WK {iso_week}", className="week-badge"),
                     html.Span(today_str, className="today-label"),
                 ]),
             ]),
