@@ -128,7 +128,7 @@ def current_week() -> dict:
 def _to_float(s) -> float | None:
     """Form string → DB numeric (empty → None)."""
     if isinstance(s, str):
-        s = s.strip()
+        s = s.strip().replace(",",".")  # allow comma as decimal separator (user locale)
     if s in (None, ""):
         return None
     try:
@@ -145,7 +145,8 @@ def _fmt(v) -> str:
         f = float(v)
     except (TypeError, ValueError):
         return str(v)
-    return str(int(f)) if f == int(f) else str(f)
+    s = str(int(f)) if f== int(f) else str(f)
+    return s
 
 
 def _truthy(v) -> bool:
@@ -624,7 +625,7 @@ app.clientside_callback(
             try { idObj = JSON.parse(idStr); } catch (e) { continue; }
             var row_id = idObj.row, cid = idObj.col;
             var v = trig[i].value;
-            var sv = (v === null || v === undefined) ? "" : String(v);
+            var sv = (v === null || v === undefined) ? "" : String(v).replace(",",".");  // allow comma as decimal separator (user locale)
             try { nf.values[site][pl][row_id][cid] = sv; } catch (e) { /* skip */ }
         }
         return nf;
@@ -662,7 +663,7 @@ app.clientside_callback(
             try { idObj = JSON.parse(idStr); } catch (e) { continue; }
             var t = idObj.type, cid = idObj.col;
             var v = trig[i].value;
-            var sv = (v === null || v === undefined) ? "" : String(v);
+            var sv = (v === null || v === undefined) ? "" : String(v).replace(",",".");
             try {
                 if (t === "fri-input")           nf.values[site][pl].fri_frc[cid] = sv;
                 else if (t === "fri-presets")    nf.fri_comments[site][pl][cid].presets = v || [];
@@ -1792,9 +1793,9 @@ app.clientside_callback(
         var THRESHOLD_ABS = 10, THRESHOLD_REL = 0.10;
         return ids.map(function(id_obj, i) {
             var cid = id_obj.col;
-            var fri = parseFloat(fri_values[i]);
+            var fri = parseFloat(String(fri_values[i]).replace(',', '.'));
             if (fri === 0) return {};
-            var mon = parseFloat(mon_frc[cid]);
+            var mon = parseFloat(String(mon_frc[cid] || '').replace(',', '.'));
             if (isNaN(fri) || isNaN(mon) || mon <= 0) return {"display": "none"};
             var diff = mon - fri;
             var below = diff >= THRESHOLD_ABS || diff / mon >= THRESHOLD_REL;

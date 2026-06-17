@@ -36,7 +36,11 @@ _PRESET_META: dict[str, dict] = {
 
 
 def _comment_text(fc: dict) -> str:
-    parts = [_PRESET_LABELS.get(p, p) for p in fc.get("presets", [])]
+    parts = [
+        _PRESET_LABELS.get(p, p)
+        for p in fc.get("presets", [])
+        if isinstance(p, str)
+    ]
     other = (fc.get("others") or "").strip()
     if other:
         parts.append(other)
@@ -232,7 +236,7 @@ def render_friday_panel(
         # Zero (no shipments): flag is sufficient — show only an optional
         # free-text box, no reason presets.
         zero_only = is_zero and not is_below
-        comment_children = [html.Div(lbl_text, className=lbl_cls)]
+        comment_children: list[Any] = [html.Div(lbl_text, className=lbl_cls)]
         if not zero_only:
             comment_children.append(dcc.Checklist(
                 id={"type": "fri-presets", "col": cid},
@@ -574,7 +578,8 @@ def render_actual_panel(
         # Zero (no shipments): flag is sufficient — show only an optional
         # free-text box, no reason presets.
         zero_only = is_zero and not is_below
-        comment_children = [html.Div(lbl_text, className=lbl_cls)]
+        comment_children = []
+        comment_children.append(html.Div(lbl_text, className=lbl_cls))
         if not zero_only:
             comment_children.append(dcc.Checklist(
                 id={"type": "actual-presets", "col": cid},
@@ -757,27 +762,29 @@ def render_thu_panel(
         zero_only = is_zero and not is_below
         comment_children = [html.Div(lbl_text, className=lbl_cls)]
         if not zero_only:
-            comment_children.append(dcc.Checklist(
-                id={"type": "thu-presets", "col": cid},
-                options=[{
-                    "label": html.Span([
-                        html.Span("★" if p.get("icon") == "star" else "●",
-                                  className="preset-dot",
-                                  style={"color": p.get("color", "#ef9f27"),
-                                         "marginRight": "5px"}),
-                        p["label"],
-                    ]),
-                    "value": p["id"],
-                } for p in COMMENT_PRESETS],
-                value=fc.get("presets", []),
-                className="preset-checklist",
-            ))
-        comment_children.append(dcc.Textarea(
+            # Wrap Checklist in a Div so the list of comment_children contains
+            # consistent html components (Divs) and satisfies type checks.
+            comment_children.append(html.Div(children=dcc.Checklist(
+                    id={"type": "thu-presets", "col": cid},
+                    options=[{
+                        "label": html.Span([
+                            html.Span("★" if p.get("icon") == "star" else "●",
+                                      className="preset-dot",
+                                      style={"color": p.get("color", "#ef9f27"),
+                                             "marginRight": "5px"}),
+                            p["label"],
+                        ]),
+                        "value": p["id"],
+                    } for p in COMMENT_PRESETS],
+                    value=fc.get("presets", []),
+                    className="preset-checklist",
+                ), className="preset-checklist-wrapper"))
+        comment_children.append(html.Div(children=dcc.Textarea(
             id={"type": "thu-others", "col": cid},
             placeholder="Reason (optional)…" if zero_only else "Others (optional)…",
             value=fc.get("others", ""),
             className="others-input",
-        ))
+        )))
         card_children.append(html.Div(
             id={"type": "thu-comment-section", "col": cid},
             className="comment-section",
