@@ -200,8 +200,7 @@ def render_friday_panel(
             # Value input
             dcc.Input(
                 id={"type": "fri-input", "col": cid},
-                type="number",
-                min=0,
+                type="text",
                 placeholder="—",
                 value=fri_values.get(cid) or None,
                 disabled=zf,
@@ -372,8 +371,7 @@ def render_wip_ot_panel(
             # Value input
             dcc.Input(
                 id={"type": "wip-ot-input", "col": cid},
-                type="number",
-                min=0,
+                type="text",
                 placeholder="—",
                 value=wip_ot_values.get(cid) or None,
                 disabled=zf,
@@ -542,8 +540,7 @@ def render_actual_panel(
             # Value input
             dcc.Input(
                 id={"type": "actual-input", "col": cid},
-                type="number",
-                min=0,
+                type="text",
                 placeholder="—",
                 value=actual_values.get(cid) or None,
                 disabled=zf,
@@ -723,8 +720,7 @@ def render_thu_panel(
             # Value input
             dcc.Input(
                 id={"type": "thu-input", "col": cid},
-                type="number",
-                min=0,
+                type="text",
                 placeholder="—",
                 value=thu_values.get(cid) or None,
                 disabled=zf,
@@ -893,8 +889,7 @@ def render_standard_row(
         data_cells.append(html.Td(className="data-cell", children=[
             dcc.Input(
                 id={"type": "row-input", "row": row["id"], "col": cid},
-                type="number",
-                min=0,
+                type="text",
                 placeholder="—",
                 value=values.get(cid) or None,
                 disabled=disabled,
