@@ -126,9 +126,12 @@ def current_week() -> dict:
 # ── DB ↔ state helpers ────────────────────────────────────────────────────────
 
 def _to_float(s) -> float | None:
-    """Form string → DB numeric (empty → None)."""
+    """Form string → DB numeric (empty → None). Comma = decimal separator."""
     if isinstance(s, str):
-        s = s.strip()
+        s = s.strip().replace(" ", "")
+        if "," in s:                       # comma=decimal, dots are thousands
+            s = s.replace(".", "").replace(",", ".")
+        # only dots / digits → leave as-is so point-decimal still parses
     if s in (None, ""):
         return None
     try:
@@ -145,7 +148,8 @@ def _fmt(v) -> str:
         f = float(v)
     except (TypeError, ValueError):
         return str(v)
-    return str(int(f)) if f == int(f) else str(f)
+    s = str(int(f)) if f == int(f) else str(f)
+    return s.replace(".", ",")          # decimal comma for display (it-IT)
 
 
 def _truthy(v) -> bool:
@@ -1792,9 +1796,9 @@ app.clientside_callback(
         var THRESHOLD_ABS = 10, THRESHOLD_REL = 0.10;
         return ids.map(function(id_obj, i) {
             var cid = id_obj.col;
-            var fri = parseFloat(fri_values[i]);
+            var fri = parseFloat(String(fri_values[i] || '').replace(',', '.'));
             if (fri === 0) return {};
-            var mon = parseFloat(mon_frc[cid]);
+            var mon = parseFloat(String(mon_frc[cid] || '').replace(',', '.'));
             if (isNaN(fri) || isNaN(mon) || mon <= 0) return {"display": "none"};
             var diff = mon - fri;
             var below = diff >= THRESHOLD_ABS || diff / mon >= THRESHOLD_REL;
@@ -1822,7 +1826,7 @@ app.clientside_callback(
             return window.dash_clientside.no_update;
         var THRESHOLD = 90;
         return ids.map(function(id_obj, i) {
-            var v = parseFloat(wip_values[i]);
+            var v = parseFloat(String(wip_values[i] || '').replace(',', '.'));
             if (isNaN(v)) return {"display": "none"};
             return v <= THRESHOLD ? {} : {"display": "none"};
         });
@@ -1850,9 +1854,9 @@ app.clientside_callback(
         var THRESHOLD_ABS = 10, THRESHOLD_REL = 0.10;
         return ids.map(function(id_obj, i) {
             var cid = id_obj.col;
-            var act = parseFloat(actual_values[i]);
+            var act = parseFloat(String(actual_values[i] || '').replace(',', '.'));
             if (act === 0) return {};
-            var mon = parseFloat(mon_frc[cid]);
+            var mon = parseFloat(String(mon_frc[cid] || '').replace(',', '.'));
             if (isNaN(act) || isNaN(mon) || mon <= 0) return {"display": "none"};
             var diff = mon - act;
             var below = diff >= THRESHOLD_ABS || diff / mon >= THRESHOLD_REL;
@@ -1883,9 +1887,9 @@ app.clientside_callback(
         var THRESHOLD_ABS = 10, THRESHOLD_REL = 0.10;
         return ids.map(function(id_obj, i) {
             var cid = id_obj.col;
-            var thu = parseFloat(thu_values[i]);
+            var thu = parseFloat(String(thu_values[i] || '').replace(',', '.'));
             if (thu === 0) return {};
-            var mon = parseFloat(mon_frc[cid]);
+            var mon = parseFloat(String(mon_frc[cid] || '').replace(',', '.'));
             if (isNaN(thu) || isNaN(mon) || mon <= 0) return {"display": "none"};
             var diff = mon - thu;
             var below = diff >= THRESHOLD_ABS || diff / mon >= THRESHOLD_REL;
