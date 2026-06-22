@@ -904,19 +904,27 @@ def render_standard_row(
             ]))
             continue
 
+        # Read-only (submitted / locked / global) cells render as a plain
+        # display Span scaled to thousands — NOT a value-bearing dcc.Input.
+        # A disabled input would push its scaled display value back into
+        # form-values via the row-input sync callback, corrupting the stored
+        # raw Kpcs (e.g. 9000 → "9" → divided again on next render).
+        if disabled:
+            data_cells.append(html.Td(className="data-cell", children=[
+                html.Span(_fmt_thousands(values.get(cid)) or "—", className="fri-display"),
+            ]))
+            continue
+
         input_cls = "num-input"
         if is_ref:
             input_cls += " num-input-ref"
 
-        # Read-only cells display scaled to thousands (1 decimal); editable
-        # cells keep the raw integer Kpcs the user types.
-        disp_val = _fmt_thousands(values.get(cid)) if disabled else values.get(cid)
         data_cells.append(html.Td(className="data-cell", children=[
             dcc.Input(
                 id={"type": "row-input", "row": row["id"], "col": cid},
                 type="text",
                 placeholder="—",
-                value=disp_val or None,
+                value=values.get(cid) or None,
                 disabled=disabled,
                 className=input_cls,
                 debounce=True,
@@ -1091,8 +1099,9 @@ def render_wip_ot_row(
         disp_cls = "fri-display" + (" fri-display-below" if is_below else " fri-display-empty" if not val else "")
         fc = (comments or {}).get(cid, {})
         ct = _comment_text(fc) if fc else ""
+        # WIP OT is a percentage — never scale to thousands; show raw value.
         data_cells.append(html.Td(className=cell_cls, children=[
-            html.Span((_fmt_thousands(val) if (is_submitted or is_readonly) else val) or "—", className=disp_cls),
+            html.Span(val or "—", className=disp_cls),
             _render_chip(fc),
         ]))
 
