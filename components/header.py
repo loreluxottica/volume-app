@@ -38,7 +38,7 @@ def render_app_header(
     is_readonly: bool,
 ) -> html.Div:
     now = datetime.now()
-    days   = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"]
+    days   = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]   # now.weekday(): Mon=0
     months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
     today_str = f"{days[now.weekday()]} {now.day} {months[now.month-1]} {now.year}"
 
