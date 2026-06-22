@@ -142,12 +142,12 @@ def render_table_header(cols: list[dict], current_site: str, current_pl: str) ->
                 className="th-section th-section-center",
                 colSpan=len(cols),
             ),
-            html.Th("", className="th-section", style={"minWidth": "180px"}),
+            html.Th("", className="th-section", style={"minWidth": "140px"}),
         ]),
         html.Tr([
             html.Th("Forecast type", className="th-col th-col-left"),
             *[html.Th(c["label"], className="th-col") for c in cols],
-            html.Th("", className="th-col", style={"minWidth": "180px"}),
+            html.Th("", className="th-col", style={"minWidth": "140px"}),
         ]),
     ]
 
@@ -1435,7 +1435,7 @@ def render_data_table(
     colgroup = html.Colgroup(
         [html.Col(style={"width": "210px"})]
         + [html.Col() for _ in cols]
-        + [html.Col(style={"width": "190px"})]
+        + [html.Col(style={"width": "140px"})]
     )
 
     if is_global:
