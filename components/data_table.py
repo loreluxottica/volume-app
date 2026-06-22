@@ -41,7 +41,8 @@ def _fmt_thousands(raw) -> str:
         v = float(t)
     except (TypeError, ValueError):
         return s
-    return f"{v / 1000.0:.1f}".replace(".", ",")
+    out = f"{v / 1000.0:.1f}".replace(".", ",")
+    return out[:-2] if out.endswith(",0") else out   # 265,0 -> 265
 
 _PRESET_LABELS: dict[str, str] = {
     p["id"]: p["label"]
