@@ -23,7 +23,8 @@ from components.header import render_topbar, render_app_header
 from components.data_table import render_data_table
 from data import cache, db
 from data.schema import (
-    ROWS, COLS_BY_PL, na_matrix, SITES,
+    ROWS, COLS_BY_PL, cols_for, na_matrix, SITES,
+    DUMMY_SUBCOLS, DUMMY_PARENT,
     cols_below_threshold, wip_ot_below_threshold, incomplete_cells,
     zero_cells_missing_comment, _is_zero_value,
 )
@@ -182,7 +183,7 @@ def _load_slice(state: dict, site: str, pl: str) -> bool:
         return True
     week    = current_week()["week_id"]
     user    = state.get("user") or DEV_USER
-    col_ids = {c["id"] for c in COLS_BY_PL[pl]}
+    col_ids = {c["id"] for c in cols_for(site, pl)}
 
     try:
         latest = cache.cached_submissions(week, site, pl)
@@ -268,6 +269,9 @@ def _load_global(state: dict, pl: str) -> bool:
         if r["product_line"] != pl:
             continue
         rid, cid = r["submission_type"], r["channel"]
+        # DONGGUAN Wearables Dummy sub-channels fold into the single `dummy`.
+        if cid in DUMMY_SUBCOLS:
+            cid = DUMMY_PARENT
         if rid not in sums or cid not in col_ids:
             continue
         v = _to_float(r["value_kpcs"])
@@ -294,7 +298,7 @@ def _row_has_data(state: dict, site: str, pl: str, row_id: str) -> bool:
     """True if the row has at least one non-empty, non-N/A cell."""
     na_cols = na_matrix(site, pl).get(row_id, [])
     vals    = state["values"][site][pl][row_id]
-    return any(vals.get(c["id"], "") for c in COLS_BY_PL[pl]
+    return any(vals.get(c["id"], "") for c in cols_for(site, pl)
                if c["id"] not in na_cols)
 
 
@@ -304,7 +308,7 @@ def _db_payload(state: dict, site: str, pl: str, row_id: str):
     raw     = state["values"][site][pl][row_id]
     zf      = state["zero_flags"][site][pl][row_id]
     values, zero_flags = {}, {}
-    for c in COLS_BY_PL[pl]:
+    for c in cols_for(site, pl):
         cid = c["id"]
         if cid in na_cols:
             continue
@@ -384,7 +388,7 @@ def _empty_state() -> dict:
         state["thu_comments"][s]     = {}
         state["thu_open"][s]         = {}
         for pl in ["FRAMES", "WEARABLES"]:
-            cols = COLS_BY_PL[pl]
+            cols = cols_for(s, pl)
             state["values"][s][pl]          = {r["id"]: {c["id"]: "" for c in cols} for r in ROWS}
             state["submitted"][s][pl]       = {r["id"]: False for r in ROWS}
             state["drafted"][s][pl]         = {r["id"]: False for r in ROWS}
@@ -994,7 +998,7 @@ def submit_row(n_clicks_list, app_data: dict, form_data: dict):
 
     # Every applicable cell must have a value or be zero-flagged (BBP §6.4).
     na_cols = na_matrix(site, pl).get(row_id, [])
-    cols    = COLS_BY_PL[pl]
+    cols    = cols_for(site, pl)
     blank = incomplete_cells(state["values"][site][pl][row_id],
                              state["zero_flags"][site][pl][row_id], na_cols, cols)
     if blank:
@@ -1098,7 +1102,7 @@ def submit_fri(n1, n2, app_data: dict, form_data: dict):
         return dash.no_update, f"⚠ No permission to edit {site}."
 
     na_cols = na_matrix(site, pl).get("fri_frc", [])
-    cols    = COLS_BY_PL[pl]
+    cols    = cols_for(site, pl)
 
     if not _row_has_data(state, site, pl, "fri_frc"):
         state["submit_attempted"] = True
@@ -1237,7 +1241,7 @@ def submit_wip_ot(n1, n2, app_data: dict, form_data: dict):
         return dash.no_update, f"⚠ No permission to edit {site}."
 
     na_cols = na_matrix(site, pl).get("wip_ot", [])
-    cols    = COLS_BY_PL[pl]
+    cols    = cols_for(site, pl)
 
     if not _row_has_data(state, site, pl, "wip_ot"):
         state["submit_attempted"] = True
@@ -1375,7 +1379,7 @@ def submit_actual(n1, n2, app_data: dict, form_data: dict):
         return dash.no_update, f"⚠ No permission to edit {site}."
 
     na_cols = na_matrix(site, pl).get("actual", [])
-    cols    = COLS_BY_PL[pl]
+    cols    = cols_for(site, pl)
 
     if not _row_has_data(state, site, pl, "actual"):
         state["submit_attempted"] = True
@@ -1514,7 +1518,7 @@ def submit_thu(n1, n2, app_data: dict, form_data: dict):
         return dash.no_update, f"⚠ No permission to edit {site}."
 
     na_cols = na_matrix(site, pl).get("thu_frc", [])
-    cols    = COLS_BY_PL[pl]
+    cols    = cols_for(site, pl)
 
     if not _row_has_data(state, site, pl, "thu_frc"):
         state["submit_attempted"] = True
@@ -1664,7 +1668,7 @@ def bulk_action(n_save, n_submit, app_data: dict, form_data: dict):
             na_cols = na_matrix(site, pl).get(rid, [])
             if incomplete_cells(state["values"][site][pl][rid],
                                 state["zero_flags"][site][pl][rid],
-                                na_cols, COLS_BY_PL[pl]):
+                                na_cols, cols_for(site, pl)):
                 errors += 1
                 continue
 

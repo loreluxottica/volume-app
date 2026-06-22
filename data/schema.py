@@ -38,6 +38,36 @@ COLS_BY_PL = {
     "WEARABLES": COLS_WEARABLES,
 }
 
+# DONGGUAN Wearables splits the single `dummy` column into two sub-channels:
+# Dummy Repl El + Dummy Local. Same column set otherwise (same order, dummy
+# replaced in place). In the GLOBAL summed view the two fold back into `dummy`.
+COLS_WEARABLES_DONGGUAN = [
+    {"id": "inb_gtk",       "label": "Inb GTK"},
+    {"id": "inb_tri",       "label": "Inb Tri"},
+    {"id": "rop_labs",      "label": "ROP/Labs"},
+    {"id": "whls_gross",    "label": "WHLS Gross"},
+    {"id": "whls_net",      "label": "WHLS Net"},
+    {"id": "retail",        "label": "Retail"},
+    {"id": "ds_na",         "label": "DS NA"},
+    {"id": "ecom",          "label": "eCom"},
+    {"id": "dummy_repl_el", "label": "Dummy Repl El"},
+    {"id": "dummy_local",   "label": "Dummy Local"},
+    {"id": "repl_el",       "label": "REPL EL"},
+    {"id": "meta",          "label": "Meta"},
+]
+
+# Dummy sub-channels fold into this parent column for the GLOBAL sum.
+DUMMY_SUBCOLS = ("dummy_repl_el", "dummy_local")
+DUMMY_PARENT  = "dummy"
+
+
+def cols_for(site: str, pl: str) -> list[dict]:
+    """Columns for a site + product line. DONGGUAN Wearables splits Dummy into
+    Dummy Repl El + Dummy Local; every other view uses the shared set."""
+    if pl == "WEARABLES" and site == "DONGGUAN":
+        return COLS_WEARABLES_DONGGUAN
+    return COLS_BY_PL[pl]
+
 # Rows shared across both product lines
 ROWS = [
     {"id": "py",      "label": "PY",           "is_ref": False, "is_fri": False},
@@ -156,8 +186,8 @@ NA_WEARABLES_BY_SITE: dict[str, dict[str, list[str]]] = {
         "wip_ot":  ["inb_gtk", "inb_tri", "rop_labs", "whls_gross", "whls_net", "ds_na", "ecom", "dummy", "repl_el", "meta"],
     },
     "DONGGUAN": {
-        "py":      ["inb_gtk", "inb_tri", "rop_labs", "whls_gross", "whls_net", "retail", "ds_na", "ecom", "dummy", "repl_el", "meta"],
-        "siop":    ["inb_gtk", "inb_tri", "rop_labs", "whls_gross", "whls_net", "retail", "ds_na", "ecom", "dummy", "repl_el", "meta"],
+        "py":      ["inb_gtk", "inb_tri", "rop_labs", "whls_gross", "whls_net", "retail", "ds_na", "ecom", "dummy_repl_el", "dummy_local", "repl_el", "meta"],
+        "siop":    ["inb_gtk", "inb_tri", "rop_labs", "whls_gross", "whls_net", "retail", "ds_na", "ecom", "dummy_repl_el", "dummy_local", "repl_el", "meta"],
         "mon_frc": ["rop_labs", "whls_gross"],
         "thu_frc": ["rop_labs", "whls_gross"],
         "fri_frc": ["rop_labs", "whls_gross"],

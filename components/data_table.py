@@ -16,11 +16,32 @@ from typing import Any
 from dash import html, dcc
 
 from data.schema import (
-    ROWS, COLS_BY_PL, na_matrix, deadlines_for,
+    ROWS, cols_for, na_matrix, deadlines_for,
     COMMENT_PRESETS, COMMENT_PRESETS_WIP_OT,
     cols_below_threshold, wip_ot_below_threshold,
     _is_zero_value,
 )
+
+
+def _fmt_thousands(raw) -> str:
+    """Read-only display only: scale a stored value to thousands, 1 decimal,
+    decimal comma. '24534' -> '24,5'. Blank/non-numeric returned unchanged.
+
+    Input and stored state stay integer Kpcs — this is a pure display transform.
+    """
+    if raw is None:
+        return ""
+    s = str(raw).strip()
+    if s == "":
+        return ""
+    t = s.replace(" ", "")
+    if "," in t:                         # comma=decimal, dots=thousands
+        t = t.replace(".", "").replace(",", ".")
+    try:
+        v = float(t)
+    except (TypeError, ValueError):
+        return s
+    return f"{v / 1000.0:.1f}".replace(".", ",")
 
 _PRESET_LABELS: dict[str, str] = {
     p["id"]: p["label"]
@@ -886,12 +907,15 @@ def render_standard_row(
         if is_ref:
             input_cls += " num-input-ref"
 
+        # Read-only cells display scaled to thousands (1 decimal); editable
+        # cells keep the raw integer Kpcs the user types.
+        disp_val = _fmt_thousands(values.get(cid)) if disabled else values.get(cid)
         data_cells.append(html.Td(className="data-cell", children=[
             dcc.Input(
                 id={"type": "row-input", "row": row["id"], "col": cid},
                 type="text",
                 placeholder="—",
-                value=values.get(cid) or None,
+                value=disp_val or None,
                 disabled=disabled,
                 className=input_cls,
                 debounce=True,
@@ -987,7 +1011,7 @@ def render_friday_row(
         fc = (comments or {}).get(cid, {})
         ct = _comment_text(fc) if fc else ""
         data_cells.append(html.Td(className=cell_cls, children=[
-            html.Span(val or "—", className=disp_cls),
+            html.Span((_fmt_thousands(val) if (is_submitted or is_readonly) else val) or "—", className=disp_cls),
             _render_chip(fc),
         ]))
 
@@ -1067,7 +1091,7 @@ def render_wip_ot_row(
         fc = (comments or {}).get(cid, {})
         ct = _comment_text(fc) if fc else ""
         data_cells.append(html.Td(className=cell_cls, children=[
-            html.Span(val or "—", className=disp_cls),
+            html.Span((_fmt_thousands(val) if (is_submitted or is_readonly) else val) or "—", className=disp_cls),
             _render_chip(fc),
         ]))
 
@@ -1148,7 +1172,7 @@ def render_actual_row(
         fc = (comments or {}).get(cid, {})
         ct = _comment_text(fc) if fc else ""
         data_cells.append(html.Td(className=cell_cls, children=[
-            html.Span(val or "—", className=disp_cls),
+            html.Span((_fmt_thousands(val) if (is_submitted or is_readonly) else val) or "—", className=disp_cls),
             _render_chip(fc),
         ]))
 
@@ -1229,7 +1253,7 @@ def render_thu_row(
         fc = (comments or {}).get(cid, {})
         ct = _comment_text(fc) if fc else ""
         data_cells.append(html.Td(className=cell_cls, children=[
-            html.Span(val or "—", className=disp_cls),
+            html.Span((_fmt_thousands(val) if (is_submitted or is_readonly) else val) or "—", className=disp_cls),
             _render_chip(fc),
         ]))
 
@@ -1284,7 +1308,7 @@ def render_data_table(
     thu_comments: dict | None = None,         # {col_id: {"presets":[], "others":""}}
     thu_open: bool = False,
 ) -> html.Div:
-    cols   = COLS_BY_PL[current_pl]
+    cols   = cols_for(current_site, current_pl)
     na_map = na_matrix(current_site, current_pl)
     dl     = deadlines_for(current_site, current_pl)   # GLOBAL has no deadlines
     is_global = current_site == "GLOBAL"
