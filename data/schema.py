@@ -316,14 +316,14 @@ WIP_OT_THRESHOLD = 90
 
 
 # Threshold rule: comment mandatory if abs diff >= THRESHOLD_ABS OR relative diff >= THRESHOLD_REL
-THRESHOLD_ABS = 10      # Kpcs
+THRESHOLD_ABS = 10000   # pcs (users now enter whole numbers, not Kpcs)
 THRESHOLD_REL = 0.10    # 10%
 
 
 def cols_below_threshold(fri_values: dict, mon_values: dict,
                          na_cols: list[str], cols: list[dict]) -> list[str]:
     """
-    Column ids where fri_frc drops vs mon_frc by >= 10 Kpcs or >= 10%.
+    Column ids where fri_frc drops vs mon_frc by >= 10000 pcs or >= 10%.
     Shared by data_table rendering and submit-time validation — single source.
     """
     result: list[str] = []

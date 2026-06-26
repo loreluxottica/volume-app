@@ -1797,7 +1797,7 @@ app.clientside_callback(
         var site = app_data.site, pl = app_data.pl;
         var sliceVals = ((form_data.values || {})[site] || {})[pl] || {};
         var mon_frc = sliceVals['mon_frc'] || {};
-        var THRESHOLD_ABS = 10, THRESHOLD_REL = 0.10;
+        var THRESHOLD_ABS = 10000, THRESHOLD_REL = 0.10;
         return ids.map(function(id_obj, i) {
             var cid = id_obj.col;
             var fri = parseFloat(String(fri_values[i] || '').replace(',', '.'));
@@ -1855,7 +1855,7 @@ app.clientside_callback(
         var site = app_data.site, pl = app_data.pl;
         var sliceVals = ((form_data.values || {})[site] || {})[pl] || {};
         var mon_frc = sliceVals['mon_frc'] || {};
-        var THRESHOLD_ABS = 10, THRESHOLD_REL = 0.10;
+        var THRESHOLD_ABS = 10000, THRESHOLD_REL = 0.10;
         return ids.map(function(id_obj, i) {
             var cid = id_obj.col;
             var act = parseFloat(String(actual_values[i] || '').replace(',', '.'));
@@ -1888,7 +1888,7 @@ app.clientside_callback(
         var site = app_data.site, pl = app_data.pl;
         var sliceVals = ((form_data.values || {})[site] || {})[pl] || {};
         var mon_frc = sliceVals['mon_frc'] || {};
-        var THRESHOLD_ABS = 10, THRESHOLD_REL = 0.10;
+        var THRESHOLD_ABS = 10000, THRESHOLD_REL = 0.10;
         return ids.map(function(id_obj, i) {
             var cid = id_obj.col;
             var thu = parseFloat(String(thu_values[i] || '').replace(',', '.'));

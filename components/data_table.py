@@ -300,7 +300,7 @@ def render_friday_panel(
             html.Div(children=[
                 html.Div("Friday FRC — data entry", className="fri-panel-title"),
                 html.Div(className="fri-panel-sub", children=[
-                    "Monday FRC shown as reference. Threshold: diff ≥ 10 Kpcs or ≥ 10% triggers mandatory comment.",
+                    "Monday FRC shown as reference. Threshold: diff ≥ 10000 pcs or ≥ 10% triggers mandatory comment.",
                     *warn_text,
                 ]),
             ]),
@@ -491,7 +491,7 @@ def render_wip_ot_panel(
 
 # ── Actual panel ──────────────────────────────────────────────────────────────
 # Full data-entry panel — replica of the Friday FRC panel. Same threshold rule
-# (diff ≥ 10 Kpcs or ≥ 10% vs Monday FRC) and same comment pre-sets (BBP §6.3).
+# (diff ≥ 10000 pcs or ≥ 10% vs Monday FRC) and same comment pre-sets (BBP §6.3).
 
 def render_actual_panel(
     cols: list[dict],
@@ -640,7 +640,7 @@ def render_actual_panel(
             html.Div(children=[
                 html.Div("Actual — data entry", className="fri-panel-title"),
                 html.Div(className="fri-panel-sub", children=[
-                    "Monday FRC shown as reference. Threshold: diff ≥ 10 Kpcs or ≥ 10% triggers a mandatory comment.",
+                    "Monday FRC shown as reference. Threshold: diff ≥ 10000 pcs or ≥ 10% triggers a mandatory comment.",
                     *warn_text,
                 ]),
             ]),
@@ -671,7 +671,7 @@ def render_actual_panel(
 
 # ── Thursday FRC panel ────────────────────────────────────────────────────────
 # Full data-entry panel — replica of the Friday FRC panel. Same threshold rule
-# (diff ≥ 10 Kpcs or ≥ 10% vs Monday FRC) and same comment pre-sets (BBP §6.3).
+# (diff ≥ 10000 pcs or ≥ 10% vs Monday FRC) and same comment pre-sets (BBP §6.3).
 
 def render_thu_panel(
     cols: list[dict],
@@ -820,7 +820,7 @@ def render_thu_panel(
             html.Div(children=[
                 html.Div("Thursday FRC — data entry", className="fri-panel-title"),
                 html.Div(className="fri-panel-sub", children=[
-                    "Monday FRC shown as reference. Threshold: diff ≥ 10 Kpcs or ≥ 10% triggers a mandatory comment.",
+                    "Monday FRC shown as reference. Threshold: diff ≥ 10000 pcs or ≥ 10% triggers a mandatory comment.",
                     *warn_text,
                 ]),
             ]),
