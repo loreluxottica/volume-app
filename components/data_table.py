@@ -16,11 +16,33 @@ from typing import Any
 from dash import html, dcc
 
 from data.schema import (
-    ROWS, COLS_BY_PL, na_matrix, deadlines_for,
+    ROWS, cols_for, na_matrix, deadlines_for,
     COMMENT_PRESETS, COMMENT_PRESETS_WIP_OT,
     cols_below_threshold, wip_ot_below_threshold,
     _is_zero_value,
 )
+
+
+def _fmt_thousands(raw) -> str:
+    """Read-only display only: scale a stored value to thousands, 1 decimal,
+    decimal comma. '24534' -> '24,5'. Blank/non-numeric returned unchanged.
+
+    Input and stored state stay integer Kpcs — this is a pure display transform.
+    """
+    if raw is None:
+        return ""
+    s = str(raw).strip()
+    if s == "":
+        return ""
+    t = s.replace(" ", "")
+    if "," in t:                         # comma=decimal, dots=thousands
+        t = t.replace(".", "").replace(",", ".")
+    try:
+        v = float(t)
+    except (TypeError, ValueError):
+        return s
+    out = f"{v / 1000.0:.1f}".replace(".", ",")
+    return out[:-2] if out.endswith(",0") else out   # 265,0 -> 265
 
 _PRESET_LABELS: dict[str, str] = {
     p["id"]: p["label"]
@@ -120,12 +142,12 @@ def render_table_header(cols: list[dict], current_site: str, current_pl: str) ->
                 className="th-section th-section-center",
                 colSpan=len(cols),
             ),
-            html.Th("", className="th-section", style={"minWidth": "180px"}),
+            html.Th("", className="th-section", style={"minWidth": "140px"}),
         ]),
         html.Tr([
             html.Th("Forecast type", className="th-col th-col-left"),
             *[html.Th(c["label"], className="th-col") for c in cols],
-            html.Th("", className="th-col", style={"minWidth": "180px"}),
+            html.Th("", className="th-col", style={"minWidth": "140px"}),
         ]),
     ]
 
@@ -278,7 +300,7 @@ def render_friday_panel(
             html.Div(children=[
                 html.Div("Friday FRC — data entry", className="fri-panel-title"),
                 html.Div(className="fri-panel-sub", children=[
-                    "Monday FRC shown as reference. Threshold: diff ≥ 10 Kpcs or ≥ 10% triggers mandatory comment.",
+                    "Monday FRC shown as reference. Threshold: diff ≥ 10000 pcs or ≥ 10% triggers mandatory comment.",
                     *warn_text,
                 ]),
             ]),
@@ -469,7 +491,7 @@ def render_wip_ot_panel(
 
 # ── Actual panel ──────────────────────────────────────────────────────────────
 # Full data-entry panel — replica of the Friday FRC panel. Same threshold rule
-# (diff ≥ 10 Kpcs or ≥ 10% vs Monday FRC) and same comment pre-sets (BBP §6.3).
+# (diff ≥ 10000 pcs or ≥ 10% vs Monday FRC) and same comment pre-sets (BBP §6.3).
 
 def render_actual_panel(
     cols: list[dict],
@@ -618,7 +640,7 @@ def render_actual_panel(
             html.Div(children=[
                 html.Div("Actual — data entry", className="fri-panel-title"),
                 html.Div(className="fri-panel-sub", children=[
-                    "Monday FRC shown as reference. Threshold: diff ≥ 10 Kpcs or ≥ 10% triggers a mandatory comment.",
+                    "Monday FRC shown as reference. Threshold: diff ≥ 10000 pcs or ≥ 10% triggers a mandatory comment.",
                     *warn_text,
                 ]),
             ]),
@@ -649,7 +671,7 @@ def render_actual_panel(
 
 # ── Thursday FRC panel ────────────────────────────────────────────────────────
 # Full data-entry panel — replica of the Friday FRC panel. Same threshold rule
-# (diff ≥ 10 Kpcs or ≥ 10% vs Monday FRC) and same comment pre-sets (BBP §6.3).
+# (diff ≥ 10000 pcs or ≥ 10% vs Monday FRC) and same comment pre-sets (BBP §6.3).
 
 def render_thu_panel(
     cols: list[dict],
@@ -798,7 +820,7 @@ def render_thu_panel(
             html.Div(children=[
                 html.Div("Thursday FRC — data entry", className="fri-panel-title"),
                 html.Div(className="fri-panel-sub", children=[
-                    "Monday FRC shown as reference. Threshold: diff ≥ 10 Kpcs or ≥ 10% triggers a mandatory comment.",
+                    "Monday FRC shown as reference. Threshold: diff ≥ 10000 pcs or ≥ 10% triggers a mandatory comment.",
                     *warn_text,
                 ]),
             ]),
@@ -879,6 +901,17 @@ def render_standard_row(
                     style={"cursor": "pointer"},
                     children=[html.Span("ZERO ✓", className="zero-label")],
                 )
+            ]))
+            continue
+
+        # Read-only (submitted / locked / global) cells render as a plain
+        # display Span scaled to thousands — NOT a value-bearing dcc.Input.
+        # A disabled input would push its scaled display value back into
+        # form-values via the row-input sync callback, corrupting the stored
+        # raw Kpcs (e.g. 9000 → "9" → divided again on next render).
+        if disabled:
+            data_cells.append(html.Td(className="data-cell", children=[
+                html.Span(_fmt_thousands(values.get(cid)) or "—", className="fri-display"),
             ]))
             continue
 
@@ -987,7 +1020,7 @@ def render_friday_row(
         fc = (comments or {}).get(cid, {})
         ct = _comment_text(fc) if fc else ""
         data_cells.append(html.Td(className=cell_cls, children=[
-            html.Span(val or "—", className=disp_cls),
+            html.Span((_fmt_thousands(val) if (is_submitted or is_readonly) else val) or "—", className=disp_cls),
             _render_chip(fc),
         ]))
 
@@ -1066,6 +1099,7 @@ def render_wip_ot_row(
         disp_cls = "fri-display" + (" fri-display-below" if is_below else " fri-display-empty" if not val else "")
         fc = (comments or {}).get(cid, {})
         ct = _comment_text(fc) if fc else ""
+        # WIP OT is a percentage — never scale to thousands; show raw value.
         data_cells.append(html.Td(className=cell_cls, children=[
             html.Span(val or "—", className=disp_cls),
             _render_chip(fc),
@@ -1148,7 +1182,7 @@ def render_actual_row(
         fc = (comments or {}).get(cid, {})
         ct = _comment_text(fc) if fc else ""
         data_cells.append(html.Td(className=cell_cls, children=[
-            html.Span(val or "—", className=disp_cls),
+            html.Span((_fmt_thousands(val) if (is_submitted or is_readonly) else val) or "—", className=disp_cls),
             _render_chip(fc),
         ]))
 
@@ -1229,7 +1263,7 @@ def render_thu_row(
         fc = (comments or {}).get(cid, {})
         ct = _comment_text(fc) if fc else ""
         data_cells.append(html.Td(className=cell_cls, children=[
-            html.Span(val or "—", className=disp_cls),
+            html.Span((_fmt_thousands(val) if (is_submitted or is_readonly) else val) or "—", className=disp_cls),
             _render_chip(fc),
         ]))
 
@@ -1284,7 +1318,7 @@ def render_data_table(
     thu_comments: dict | None = None,         # {col_id: {"presets":[], "others":""}}
     thu_open: bool = False,
 ) -> html.Div:
-    cols   = COLS_BY_PL[current_pl]
+    cols   = cols_for(current_site, current_pl)
     na_map = na_matrix(current_site, current_pl)
     dl     = deadlines_for(current_site, current_pl)   # GLOBAL has no deadlines
     is_global = current_site == "GLOBAL"
@@ -1410,7 +1444,7 @@ def render_data_table(
     colgroup = html.Colgroup(
         [html.Col(style={"width": "210px"})]
         + [html.Col() for _ in cols]
-        + [html.Col(style={"width": "190px"})]
+        + [html.Col(style={"width": "140px"})]
     )
 
     if is_global:

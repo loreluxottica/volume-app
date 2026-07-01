@@ -37,7 +37,7 @@ line (Frames / Wearables). Ogni riga si salva come bozza (Save) o si conferma
   (valore + checkbox "Confirm zero" + commento), con Save/Submit propri.
 - **Commento obbligatorio sotto soglia** — la sezione commento compare/scompare
   in tempo reale mentre si digita:
-  - `Friday FRC` e `Actual`: se lo scostamento vs Monday FRC è ≥ 10 Kpcs o ≥ 10%.
+  - `Friday FRC` e `Actual`: se lo scostamento vs Monday FRC è ≥ 10000 pcs o ≥ 10%.
   - `WIP OT %`: se il valore è ≤ 90%.
 - **Validazione celle vuote** — nelle righe a pannello ogni cella applicabile
   deve avere un valore (anche 0) o essere marcata zero; in mancanza il Submit

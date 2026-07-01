@@ -5,7 +5,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 from __future__ import annotations
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from dash import html, dcc
 
@@ -38,14 +38,18 @@ def render_app_header(
     is_readonly: bool,
 ) -> html.Div:
     now = datetime.now()
-    days   = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"]
+    days   = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]   # now.weekday(): Mon=0
     months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
     today_str = f"{days[now.weekday()]} {now.day} {months[now.month-1]} {now.year}"
 
-    # Reporting week is the prior ISO week; WK = (current ISO week) - 1.
-    # Subtract 7 days first so week 1 wraps to last year's 52/53 correctly.
-    iso_week    = now.isocalendar()[1]
-    report_week = (now - timedelta(days=7)).isocalendar()[1]
+    # ISO WK is the open week from the DB (weeks table); WK = ISO WK - 1.
+    # Week 1 wraps back to the prior year's last ISO week (52 or 53).
+    iso_week    = week_id
+    if week_id > 1:
+        report_week = week_id - 1
+    else:
+        last = datetime(year - 1, 12, 28).isocalendar()[1]   # always 52/53
+        report_week = last
 
     header = html.Div(className="app-header", children=[
         html.Div(className="header-left", children=[
