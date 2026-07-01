@@ -85,24 +85,25 @@ def render_app_header(
                     className="site-dropdown",
                     style={"width": "240px"},
                 ),
+                # Week back-selector — stacked directly under the Site dropdown.
+                dcc.Dropdown(
+                    id="week-select",
+                    options=week_options,
+                    value=f"{year}-{week_id}",
+                    clearable=False,
+                    searchable=False,
+                    className="week-dropdown",
+                    style={"width": "240px", "marginTop": "6px"},
+                ),
             ]),
 
-            # Week badge + back-selector
+            # Week badge + date
             html.Div(className="field-group", children=[
                 html.Div("Week", className="field-label"),
                 html.Div(className="week-row", children=[
                     html.Span(
                         f"WK {report_week} | ISO WK {iso_week}",
                         className="week-badge" + (" week-badge-past" if is_past else ""),
-                    ),
-                    dcc.Dropdown(
-                        id="week-select",
-                        options=week_options,
-                        value=f"{year}-{week_id}",
-                        clearable=False,
-                        searchable=False,
-                        className="week-dropdown",
-                        style={"width": "220px"},
                     ),
                     html.Span(today_str, className="today-label"),
                 ]),
