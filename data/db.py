@@ -149,6 +149,14 @@ def get_current_week() -> dict[str, Any]:
     return {str(k): v for k, v in df.iloc[0].to_dict().items()}
 
 
+def list_weeks() -> pd.DataFrame:
+    """Return every week (open + past), newest first — powers the back-selector."""
+    return _exec(
+        f"SELECT week_id, year, is_open FROM {_T_WEEKS()} "
+        "ORDER BY year DESC, week_id DESC"
+    )
+
+
 def create_week(week_id: int, year: int) -> None:
     """Insert a new week (called by the Tuesday scheduler job)."""
     _run(
@@ -224,8 +232,10 @@ def submit_row(
     values: dict[str, float | None],
     zero_flags: dict[str, bool],
     comments: dict[str, dict] | None = None,
+    is_delay: bool = False,
 ) -> None:
     now = datetime.now(timezone.utc)
+    delay_ts = now if is_delay else None
 
     rows_to_insert = []
     for channel, value in values.items():
@@ -271,17 +281,21 @@ def submit_row(
         params,
     )
 
-    placeholders_insert = ", ".join(["(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, TRUE, %s, %s, FALSE, NULL)"] * len(rows_to_insert))
+    placeholders_insert = ", ".join(["(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, TRUE, %s, %s, FALSE, NULL, %s, %s)"] * len(rows_to_insert))
+    # Separate param list: append (is_delay, delay_timestamp) to each row so the
+    # two new columns don't corrupt the 12-col MERGE params reused above.
+    insert_params = [p for row in rows_to_insert for p in (*row, is_delay, delay_ts)]
     _run(
         f"""
         INSERT INTO {_T_SUBMISSIONS()}
           (submission_id, timestamp, week_id, site, product_line,
            user_id, submission_type, channel, value_kpcs,
            is_zero_flagged, official_log,
-           comment_preset, comment_other, is_amendment, ref_submission_id)
+           comment_preset, comment_other, is_amendment, ref_submission_id,
+           is_delay, delay_timestamp)
         VALUES {placeholders_insert}
         """,
-        params,
+        insert_params,
     )
 
 

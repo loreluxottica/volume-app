@@ -30,26 +30,40 @@ def render_topbar(username: str = "Lorenzo Muscillo") -> html.Div:
     ])
 
 
+def _report_week(week_id: int, year: int) -> int:
+    """ISO week stored in DB → displayed report week (WK = ISO WK - 1).
+    Week 1 wraps back to the prior year's last ISO week (52 or 53)."""
+    if week_id > 1:
+        return week_id - 1
+    return datetime(year - 1, 12, 28).isocalendar()[1]   # always 52/53
+
+
 def render_app_header(
     current_site: str,
     current_pl: str,
     week_id: int,
     year: int,
     is_readonly: bool,
+    weeks: list[dict] | None = None,
+    open_week_id: int | None = None,
 ) -> html.Div:
     now = datetime.now()
     days   = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]   # now.weekday(): Mon=0
     months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
     today_str = f"{days[now.weekday()]} {now.day} {months[now.month-1]} {now.year}"
 
-    # ISO WK is the open week from the DB (weeks table); WK = ISO WK - 1.
-    # Week 1 wraps back to the prior year's last ISO week (52 or 53).
     iso_week    = week_id
-    if week_id > 1:
-        report_week = week_id - 1
-    else:
-        last = datetime(year - 1, 12, 28).isocalendar()[1]   # always 52/53
-        report_week = last
+    report_week = _report_week(week_id, year)
+    is_past     = open_week_id is not None and week_id != open_week_id
+
+    # Back-selector options: open week + every past week, newest first.
+    week_options = []
+    for w in (weeks or []):
+        wid, wyr = int(w["week_id"]), int(w["year"])
+        label = f"WK {_report_week(wid, wyr)} | ISO {wid} · {wyr}"
+        if open_week_id is not None and wid == open_week_id:
+            label += "  (current)"
+        week_options.append({"label": label, "value": f"{wyr}-{wid}"})
 
     header = html.Div(className="app-header", children=[
         html.Div(className="header-left", children=[
@@ -71,13 +85,26 @@ def render_app_header(
                     className="site-dropdown",
                     style={"width": "240px"},
                 ),
+                # Week back-selector — stacked directly under the Site dropdown.
+                dcc.Dropdown(
+                    id="week-select",
+                    options=week_options,
+                    value=f"{year}-{week_id}",
+                    clearable=False,
+                    searchable=False,
+                    className="week-dropdown",
+                    style={"width": "240px", "marginTop": "6px"},
+                ),
             ]),
 
-            # Week badge
+            # Week badge + date
             html.Div(className="field-group", children=[
-                html.Div("Current week", className="field-label"),
+                html.Div("Week", className="field-label"),
                 html.Div(className="week-row", children=[
-                    html.Span(f"WK {report_week} | ISO WK {iso_week}", className="week-badge"),
+                    html.Span(
+                        f"WK {report_week} | ISO WK {iso_week}",
+                        className="week-badge" + (" week-badge-past" if is_past else ""),
+                    ),
                     html.Span(today_str, className="today-label"),
                 ]),
             ]),
@@ -156,4 +183,16 @@ def render_app_header(
         ],
     )
 
-    return html.Div([header, banner])
+    # Past-week banner — shown when editing an earlier (non-open) week.
+    past_banner = html.Div(
+        id="pastweek-banner",
+        className="pastweek-banner",
+        style={"display": "flex" if (is_past and not is_readonly) else "none"},
+        children=[
+            "⏱ You are editing ",
+            html.Strong(f"WK {report_week} | ISO WK {iso_week}"),
+            " — a past week. Submissions will be flagged as delayed (delay = TRUE).",
+        ],
+    )
+
+    return html.Div([header, banner, past_banner])
