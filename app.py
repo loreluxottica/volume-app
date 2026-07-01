@@ -124,6 +124,12 @@ def current_week() -> dict:
         return {"week_id": 0, "year": 0}
 
 
+def _is_delay(state: dict) -> bool:
+    """True when the selected week is an earlier (past) week, not the open one."""
+    wk = state.get("week_id") or 0
+    return wk != 0 and wk != current_week()["week_id"]
+
+
 # ── DB ↔ state helpers ────────────────────────────────────────────────────────
 
 def _to_float(s) -> float | None:
@@ -181,7 +187,7 @@ def _load_slice(state: dict, site: str, pl: str) -> bool:
     key = f"{site}|{pl}"
     if key in state["loaded"]:
         return True
-    week    = current_week()["week_id"]
+    week    = state["week_id"]
     user    = state.get("user") or DEV_USER
     col_ids = {c["id"] for c in cols_for(site, pl)}
 
@@ -259,7 +265,7 @@ def _load_global(state: dict, pl: str) -> bool:
         return True
     col_ids = {c["id"] for c in COLS_BY_PL[pl]}
     try:
-        ext = cache.cached_gli_extract(current_week()["week_id"])
+        ext = cache.cached_gli_extract(state["week_id"])
     except Exception as exc:
         print(f"[warn] get_gli_extract failed: {exc}")
         return False
@@ -354,6 +360,9 @@ def _empty_state() -> dict:
     state: dict = {
         "site":           OWN_SITE,
         "pl":             "FRAMES",
+        "week_id":        0,        # selected week (set by bootstrap = open week)
+        "week_year":      0,
+        "pending_delay":  None,     # {"row": ...} awaiting past-week confirm
         "fri_open":       False,
         "submit_attempted": False,
         "user":           "",      # signed-in email (set by bootstrap)
@@ -438,6 +447,16 @@ app.layout = html.Div([
     dcc.Store(id="form-values", data=_form_part(_INIT_STATE)),
     # Toast notification store
     dcc.Store(id="toast-store", data=""),
+    # Past-week confirm modal + the pending submit it gates
+    dcc.ConfirmDialog(
+        id="delay-confirm",
+        message=(
+            "Attention — you are modifying data from a past week.\n\n"
+            "Submitting will record this as a delayed edit (delay = TRUE) with a "
+            "timestamp.\n\nDo you want to continue?"
+        ),
+    ),
+    dcc.Store(id="pending-delay", data=None),
     # Fires once on page load → the bootstrap callback (runs in a request ctx)
     dcc.Interval(id="boot-trigger", interval=200, max_intervals=1),
 
@@ -474,9 +493,12 @@ def bootstrap(_n, app_data: dict, form_data: dict):
 
     user  = _current_user()
     sites = _load_access().get(user, set())
-    state["user"]     = user
-    state["is_admin"] = "*" in sites
-    state["sites"]    = sorted(s for s in sites if s != "*")
+    state["user"]      = user
+    state["is_admin"]  = "*" in sites
+    state["sites"]     = sorted(s for s in sites if s != "*")
+    wk = current_week()
+    state["week_id"]   = wk["week_id"]
+    state["week_year"] = wk["year"]
     # Non-admins start on their own plant.
     if not state["is_admin"] and state["sites"]:
         state["site"] = state["sites"][0]
@@ -485,6 +507,52 @@ def bootstrap(_n, app_data: dict, form_data: dict):
     state["booted"] = True
     return (_app_part(state), _form_part(state),
             "" if ok else "⚠ Could not load data from the database.")
+
+
+# ── Change week (back-selector) ───────────────────────────────────────────────
+# Switching the selected week wipes the per-(site,pl) slices and reloads the view
+# for the new week — one week is held in state at a time, so the nested value
+# dicts stay week-agnostic.
+
+_WEEK_RESET_KEYS = (
+    "values", "submitted", "drafted", "zero_flags", "fri_comments",
+    "global", "global_loaded", "loaded",
+    "wip_ot_comments", "wip_ot_open", "actual_comments", "actual_open",
+    "thu_comments", "thu_open",
+)
+
+
+@app.callback(
+    Output("app-state",   "data", allow_duplicate=True),
+    Output("form-values", "data", allow_duplicate=True),
+    Output("toast-store", "data", allow_duplicate=True),
+    Input("week-select", "value"),
+    State("app-state", "data"),
+    State("form-values", "data"),
+    prevent_initial_call=True,
+)
+def change_week(val, app_data: dict, form_data: dict):
+    state = _merge(app_data, form_data)
+    if not val:
+        return dash.no_update, dash.no_update, dash.no_update
+    try:
+        year, wk = (int(x) for x in str(val).split("-"))
+    except (ValueError, TypeError):
+        return dash.no_update, dash.no_update, dash.no_update
+    if wk == state.get("week_id"):
+        return dash.no_update, dash.no_update, dash.no_update
+
+    fresh = _empty_state()
+    for k in _WEEK_RESET_KEYS:
+        state[k] = fresh[k]
+    state["week_id"]   = wk
+    state["week_year"] = year
+
+    ok = _load_for_view(state, state["site"], state["pl"])
+    rw = wk - 1 if wk > 1 else 0
+    toast = (f"Loaded WK {rw} | ISO WK {wk}" if ok
+             else "⚠ Could not load data for the selected week.")
+    return _app_part(state), _form_part(state), toast
 
 
 # ── Main render callback ──────────────────────────────────────────────────────
@@ -535,10 +603,19 @@ def render_ui(app_data: dict, form_data: dict):
         thc       = state.get("thu_comments", {}).get(site, {}).get(pl, {})
         tho       = state.get("thu_open", {}).get(site, {}).get(pl, False)
 
+    try:
+        weeks = cache.cached_weeks().to_dict("records")
+    except Exception as exc:
+        print(f"[warn] could not load weeks list: {exc}")
+        weeks = []
+    open_wk = current_week()
     header = render_app_header(
         current_site=site, current_pl=pl,
-        week_id=current_week()["week_id"], year=current_week()["year"],
+        week_id=state["week_id"] or open_wk["week_id"],
+        year=state["week_year"] or open_wk["year"],
         is_readonly=is_ro,
+        weeks=weeks,
+        open_week_id=open_wk["week_id"],
     )
     body = render_data_table(
         current_site=site, current_pl=pl,
@@ -960,7 +1037,7 @@ def save_row(n_clicks_list, app_data: dict, form_data: dict):
 
     row_label = next(r["label"] for r in ROWS if r["id"] == row_id)
     values, zero_flags, comments = _db_payload(state, site, pl, row_id)
-    week = current_week()["week_id"]
+    week = state["week_id"]
     try:
         db.save_draft(week, site, pl, state["user"],
                       row_id, values, zero_flags, comments)
@@ -970,6 +1047,130 @@ def save_row(n_clicks_list, app_data: dict, form_data: dict):
 
     state["drafted"][site][pl][row_id] = True
     return _app_part(state), f"⤓ {row_label} — draft saved"
+
+
+# ── Submit write helpers (shared by direct + past-week-confirm paths) ─────────
+# The write tail of every submit path is factored here so both the direct submit
+# (open week) and the confirm-dispatcher (past week, is_delay=True) run identical
+# DB writes and state updates.
+
+_SUBMIT_TOAST = {
+    "fri_frc": "✓ Friday FRC submitted",
+    "wip_ot":  "✓ WIP OT % submitted",
+    "actual":  "✓ Actual submitted",
+    "thu_frc": "✓ Thursday FRC submitted",
+}
+
+
+def _do_submit(state: dict, site: str, pl: str, row_id: str, is_delay: bool,
+               payload: dict | None = None) -> str:
+    """Write one submitted row, update state flags, return the toast text.
+    `payload` is a click-time snapshot used by the deferred (past-week) path so
+    the comment-pruning done during validation is preserved."""
+    week = state["week_id"]
+    user = state["user"]
+    if payload is None:
+        values, zero_flags, comments = _db_payload(state, site, pl, row_id)
+    else:
+        values     = payload["values"]
+        zero_flags = payload["zero_flags"]
+        comments   = payload["comments"]
+    db.submit_row(week, site, pl, user, row_id,
+                  values, zero_flags, comments, is_delay=is_delay)
+    db.delete_draft(week, site, pl, row_id, user)
+    cache.invalidate_submissions(week, site, pl)
+    cache.invalidate_drafts(week, site, pl, user)
+    state["submitted"][site][pl][row_id] = True
+    state["drafted"][site][pl][row_id]   = False
+    if row_id == "fri_frc":
+        state["fri_open"]         = False
+        state["submit_attempted"] = False
+    elif row_id == "wip_ot":
+        state["wip_ot_open"][site][pl] = False
+        state["submit_attempted"]      = False
+    elif row_id == "actual":
+        state["actual_open"][site][pl] = False
+        state["submit_attempted"]      = False
+    elif row_id == "thu_frc":
+        state["thu_open"][site][pl] = False
+        state["submit_attempted"]   = False
+    if row_id in _SUBMIT_TOAST:
+        return _SUBMIT_TOAST[row_id]
+    label = next(r["label"] for r in ROWS if r["id"] == row_id)
+    return f"✓ {label} submitted"
+
+
+def _gate_submit(state: dict, site: str, pl: str, row_id: str):
+    """Either write now (open week) or stash the pending edit and pop the modal
+    (past week). Returns the (app-state, toast) tuple the callback should return."""
+    if _is_delay(state):
+        values, zero_flags, comments = _db_payload(state, site, pl, row_id)
+        state["pending_delay"] = {
+            "row": row_id,
+            "payload": {"values": values, "zero_flags": zero_flags, "comments": comments},
+        }
+        return _app_part(state), "⏱ Confirm the delayed edit to submit this past week."
+    try:
+        msg = _do_submit(state, site, pl, row_id, is_delay=False)
+    except Exception as exc:
+        return dash.no_update, f"⚠ Submit failed — {exc}"
+    return _app_part(state), msg
+
+
+def _run_bulk(state: dict, site: str, pl: str, is_save: bool, is_delay: bool) -> str:
+    """Save-all / Submit-all over the standard rows; returns the toast text."""
+    week = state["week_id"]
+    user = state["user"]
+    n, errors = 0, 0
+
+    for row in ROWS:
+        rid = row["id"]
+        # Panel rows (Friday FRC, Thursday FRC, WIP OT %, Actual) have their own
+        # panel save/submit buttons.
+        if row["is_fri"] or row["is_ref"] or rid in ("wip_ot", "actual", "thu_frc"):
+            continue
+        if state["submitted"][site][pl][rid]:
+            continue
+        if not _row_has_data(state, site, pl, rid):
+            continue
+
+        # Submit (not Save): skip rows with blank non-N/A cells (BBP §6.4).
+        if not is_save:
+            na_cols = na_matrix(site, pl).get(rid, [])
+            if incomplete_cells(state["values"][site][pl][rid],
+                                state["zero_flags"][site][pl][rid],
+                                na_cols, cols_for(site, pl)):
+                errors += 1
+                continue
+
+        values, zero_flags, comments = _db_payload(state, site, pl, rid)
+        try:
+            if is_save:
+                db.save_draft(week, site, pl, user, rid,
+                              values, zero_flags, comments)
+                cache.invalidate_drafts(week, site, pl, user)
+                state["drafted"][site][pl][rid] = True
+            else:
+                db.submit_row(week, site, pl, user, rid,
+                              values, zero_flags, comments, is_delay=is_delay)
+                db.delete_draft(week, site, pl, rid, user)
+                cache.invalidate_submissions(week, site, pl)
+                cache.invalidate_drafts(week, site, pl, user)
+                state["submitted"][site][pl][rid] = True
+                state["drafted"][site][pl][rid]   = False
+            n += 1
+        except Exception as exc:
+            errors += 1
+            print(f"[warn] bulk {'save' if is_save else 'submit'} {rid} failed: {exc}")
+
+    verb = "saved as draft" if is_save else "submitted"
+    if n and errors:
+        return f"{n} row(s) {verb}, {errors} failed — check and retry"
+    if n:
+        return f"{'⤓' if is_save else '✓'} {n} row(s) {verb}"
+    if errors:
+        return f"⚠ All {errors} row(s) failed — check the connection"
+    return "No open rows with data to save." if is_save else "No open rows with data."
 
 
 # ── Submit row ────────────────────────────────────────────────────────────────
@@ -1006,21 +1207,7 @@ def submit_row(n_clicks_list, app_data: dict, form_data: dict):
         blank_labels = [c["label"] for c in cols if c["id"] in blank]
         return _app_part(state), f"⚠ Fill or confirm zero for all cells: {', '.join(blank_labels)}"
 
-    row_label = next(r["label"] for r in ROWS if r["id"] == row_id)
-    values, zero_flags, comments = _db_payload(state, site, pl, row_id)
-    week = current_week()["week_id"]
-    try:
-        db.submit_row(week, site, pl, state["user"],
-                      row_id, values, zero_flags, comments)
-        db.delete_draft(week, site, pl, row_id, state["user"])
-        cache.invalidate_submissions(week, site, pl)
-        cache.invalidate_drafts(week, site, pl, state["user"])
-    except Exception as exc:
-        return dash.no_update, f"⚠ Submit failed — {exc}"
-
-    state["submitted"][site][pl][row_id] = True
-    state["drafted"][site][pl][row_id]   = False
-    return _app_part(state), f"✓ {row_label} submitted"
+    return _gate_submit(state, site, pl, row_id)
 
 
 # ── Change submission (re-open) ───────────────────────────────────────────────
@@ -1069,7 +1256,7 @@ def save_fri(n1, n2, app_data: dict, form_data: dict):
         return dash.no_update, "⚠ Enter at least one value before saving."
 
     values, zero_flags, comments = _db_payload(state, site, pl, "fri_frc")
-    week = current_week()["week_id"]
+    week = state["week_id"]
     try:
         db.save_draft(week, site, pl, state["user"],
                       "fri_frc", values, zero_flags, comments)
@@ -1143,22 +1330,7 @@ def submit_fri(n1, n2, app_data: dict, form_data: dict):
         if cid in keep
     }
 
-    values, zero_flags, comments = _db_payload(state, site, pl, "fri_frc")
-    week = current_week()["week_id"]
-    try:
-        db.submit_row(week, site, pl, state["user"],
-                      "fri_frc", values, zero_flags, comments)
-        db.delete_draft(week, site, pl, "fri_frc", state["user"])
-        cache.invalidate_submissions(week, site, pl)
-        cache.invalidate_drafts(week, site, pl, state["user"])
-    except Exception as exc:
-        return dash.no_update, f"⚠ Submit failed — {exc}"
-
-    state["submitted"][site][pl]["fri_frc"] = True
-    state["drafted"][site][pl]["fri_frc"]   = False
-    state["fri_open"]         = False
-    state["submit_attempted"] = False
-    return _app_part(state), "✓ Friday FRC submitted"
+    return _gate_submit(state, site, pl, "fri_frc")
 
 
 # ── Change Friday submission ──────────────────────────────────────────────────
@@ -1208,7 +1380,7 @@ def save_wip_ot(n1, n2, app_data: dict, form_data: dict):
         return dash.no_update, "⚠ Enter at least one value before saving."
 
     values, zero_flags, comments = _db_payload(state, site, pl, "wip_ot")
-    week = current_week()["week_id"]
+    week = state["week_id"]
     try:
         db.save_draft(week, site, pl, state["user"],
                       "wip_ot", values, zero_flags, comments)
@@ -1281,22 +1453,7 @@ def submit_wip_ot(n1, n2, app_data: dict, form_data: dict):
         if cid in keep
     }
 
-    values, zero_flags, comments = _db_payload(state, site, pl, "wip_ot")
-    week = current_week()["week_id"]
-    try:
-        db.submit_row(week, site, pl, state["user"],
-                      "wip_ot", values, zero_flags, comments)
-        db.delete_draft(week, site, pl, "wip_ot", state["user"])
-        cache.invalidate_submissions(week, site, pl)
-        cache.invalidate_drafts(week, site, pl, state["user"])
-    except Exception as exc:
-        return dash.no_update, f"⚠ Submit failed — {exc}"
-
-    state["submitted"][site][pl]["wip_ot"] = True
-    state["drafted"][site][pl]["wip_ot"]   = False
-    state["wip_ot_open"][site][pl]         = False
-    state["submit_attempted"]              = False
-    return _app_part(state), "✓ WIP OT % submitted"
+    return _gate_submit(state, site, pl, "wip_ot")
 
 
 # ── Change WIP OT % submission ────────────────────────────────────────────────
@@ -1346,7 +1503,7 @@ def save_actual(n1, n2, app_data: dict, form_data: dict):
         return dash.no_update, "⚠ Enter at least one value before saving."
 
     values, zero_flags, comments = _db_payload(state, site, pl, "actual")
-    week = current_week()["week_id"]
+    week = state["week_id"]
     try:
         db.save_draft(week, site, pl, state["user"],
                       "actual", values, zero_flags, comments)
@@ -1420,22 +1577,7 @@ def submit_actual(n1, n2, app_data: dict, form_data: dict):
         if cid in keep
     }
 
-    values, zero_flags, comments = _db_payload(state, site, pl, "actual")
-    week = current_week()["week_id"]
-    try:
-        db.submit_row(week, site, pl, state["user"],
-                      "actual", values, zero_flags, comments)
-        db.delete_draft(week, site, pl, "actual", state["user"])
-        cache.invalidate_submissions(week, site, pl)
-        cache.invalidate_drafts(week, site, pl, state["user"])
-    except Exception as exc:
-        return dash.no_update, f"⚠ Submit failed — {exc}"
-
-    state["submitted"][site][pl]["actual"] = True
-    state["drafted"][site][pl]["actual"]   = False
-    state["actual_open"][site][pl]         = False
-    state["submit_attempted"]              = False
-    return _app_part(state), "✓ Actual submitted"
+    return _gate_submit(state, site, pl, "actual")
 
 
 # ── Change Actual submission ──────────────────────────────────────────────────
@@ -1485,7 +1627,7 @@ def save_thu(n1, n2, app_data: dict, form_data: dict):
         return dash.no_update, "⚠ Enter at least one value before saving."
 
     values, zero_flags, comments = _db_payload(state, site, pl, "thu_frc")
-    week = current_week()["week_id"]
+    week = state["week_id"]
     try:
         db.save_draft(week, site, pl, state["user"],
                       "thu_frc", values, zero_flags, comments)
@@ -1559,22 +1701,7 @@ def submit_thu(n1, n2, app_data: dict, form_data: dict):
         if cid in keep
     }
 
-    values, zero_flags, comments = _db_payload(state, site, pl, "thu_frc")
-    week = current_week()["week_id"]
-    try:
-        db.submit_row(week, site, pl, state["user"],
-                      "thu_frc", values, zero_flags, comments)
-        db.delete_draft(week, site, pl, "thu_frc", state["user"])
-        cache.invalidate_submissions(week, site, pl)
-        cache.invalidate_drafts(week, site, pl, state["user"])
-    except Exception as exc:
-        return dash.no_update, f"⚠ Submit failed — {exc}"
-
-    state["submitted"][site][pl]["thu_frc"] = True
-    state["drafted"][site][pl]["thu_frc"]   = False
-    state["thu_open"][site][pl]             = False
-    state["submit_attempted"]               = False
-    return _app_part(state), "✓ Thursday FRC submitted"
+    return _gate_submit(state, site, pl, "thu_frc")
 
 
 # ── Change Thursday FRC submission ────────────────────────────────────────────
@@ -1647,61 +1774,57 @@ def bulk_action(n_save, n_submit, app_data: dict, form_data: dict):
     if not _can_edit(site, state):
         return dash.no_update, f"⚠ No permission to edit {site}."
 
-    week    = current_week()["week_id"]
-    user    = state["user"]
     is_save = triggered == "btn-save-all"
-    n, errors = 0, 0
 
-    for row in ROWS:
-        rid = row["id"]
-        # Panel rows (Friday FRC, Thursday FRC, WIP OT %, Actual) have their own
-        # panel save/submit buttons.
-        if row["is_fri"] or row["is_ref"] or rid in ("wip_ot", "actual", "thu_frc"):
-            continue
-        if state["submitted"][site][pl][rid]:
-            continue
-        if not _row_has_data(state, site, pl, rid):
-            continue
+    # Submit-all on a past week is gated by the same confirm modal.
+    if not is_save and _is_delay(state):
+        state["pending_delay"] = {"row": "__bulk__"}
+        return _app_part(state), "⏱ Confirm the delayed edit to submit this past week."
 
-        # Submit (not Save): skip rows with blank non-N/A cells (BBP §6.4).
-        if not is_save:
-            na_cols = na_matrix(site, pl).get(rid, [])
-            if incomplete_cells(state["values"][site][pl][rid],
-                                state["zero_flags"][site][pl][rid],
-                                na_cols, cols_for(site, pl)):
-                errors += 1
-                continue
+    return _app_part(state), _run_bulk(state, site, pl, is_save, is_delay=False)
 
-        values, zero_flags, comments = _db_payload(state, site, pl, rid)
-        try:
-            if is_save:
-                db.save_draft(week, site, pl, user, rid,
-                              values, zero_flags, comments)
-                cache.invalidate_drafts(week, site, pl, user)
-                state["drafted"][site][pl][rid] = True
-            else:
-                db.submit_row(week, site, pl, user, rid,
-                              values, zero_flags, comments)
-                db.delete_draft(week, site, pl, rid, user)
-                cache.invalidate_submissions(week, site, pl)
-                cache.invalidate_drafts(week, site, pl, user)
-                state["submitted"][site][pl][rid] = True
-                state["drafted"][site][pl][rid]   = False
-            n += 1
-        except Exception as exc:
-            errors += 1
-            print(f"[warn] bulk {triggered} {rid} failed: {exc}")
 
-    verb = "saved as draft" if is_save else "submitted"
-    if n and errors:
-        msg = f"{n} row(s) {verb}, {errors} failed — check and retry"
-    elif n:
-        msg = f"{'⤓' if is_save else '✓'} {n} row(s) {verb}"
-    elif errors:
-        msg = f"⚠ All {errors} row(s) failed — check the connection"
-    else:
-        msg = "No open rows with data to save." if is_save else "No open rows with data."
+# ── Past-week confirm modal ───────────────────────────────────────────────────
+# A pending delayed edit lives in state["pending_delay"]. This bridge pops the
+# modal whenever one is set, and clears when it is resolved.
 
+@app.callback(
+    Output("delay-confirm", "displayed"),
+    Input("app-state", "data"),
+    prevent_initial_call=True,
+)
+def toggle_delay_modal(app_data: dict):
+    return bool((app_data or {}).get("pending_delay"))
+
+
+@app.callback(
+    Output("app-state",   "data", allow_duplicate=True),
+    Output("toast-store", "data", allow_duplicate=True),
+    Input("delay-confirm", "submit_n_clicks"),
+    Input("delay-confirm", "cancel_n_clicks"),
+    State("app-state", "data"),
+    State("form-values", "data"),
+    prevent_initial_call=True,
+)
+def resolve_delay(_submit, _cancel, app_data: dict, form_data: dict):
+    state   = _merge(app_data, form_data)
+    pending = state.get("pending_delay")
+    trig    = ctx.triggered[0]["prop_id"] if ctx.triggered else ""
+    state["pending_delay"] = None
+
+    if not pending or trig.endswith("cancel_n_clicks"):
+        return _app_part(state), ("Delayed edit cancelled." if pending else dash.no_update)
+
+    row      = pending.get("row")
+    site, pl = state["site"], state["pl"]
+    try:
+        if row == "__bulk__":
+            msg = _run_bulk(state, site, pl, is_save=False, is_delay=True)
+        else:
+            msg = _do_submit(state, site, pl, row, is_delay=True,
+                             payload=pending.get("payload"))
+    except Exception as exc:
+        return _app_part(state), f"⚠ Submit failed — {exc}"
     return _app_part(state), msg
 
 
@@ -1720,7 +1843,7 @@ def export_csv(n, state: dict):
     if not n:
         return dash.no_update, dash.no_update
 
-    week = current_week()["week_id"]
+    week = state["week_id"]
     try:
         df = cache.cached_gli_extract(week)
     except Exception as exc:

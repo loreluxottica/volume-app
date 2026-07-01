@@ -22,6 +22,7 @@ from data.db import (
     get_drafts,
     get_gli_extract,
     get_latest_submissions,
+    list_weeks,
 )
 
 _lock = threading.Lock()
@@ -29,6 +30,8 @@ _lock = threading.Lock()
 _current_week: dict[str, Any] | None = None
 _current_week_ts: float = 0.0          # monotonic timestamp of last fetch
 _WEEK_TTL = 1800                        # re-check DB every 30 min
+_weeks: pd.DataFrame | None = None
+_weeks_ts: float = 0.0
 _access: dict[str, set[str]] | None = None
 _submissions_cache: dict[tuple, pd.DataFrame] = {}
 _drafts_cache: dict[tuple, pd.DataFrame] = {}
@@ -50,6 +53,18 @@ def cached_current_week() -> dict[str, Any]:
                 _current_week = fresh
                 _current_week_ts = monotonic()
     return _current_week
+
+
+def cached_weeks() -> pd.DataFrame:
+    """All weeks (open + past) for the back-selector; re-checked every 30 min."""
+    global _weeks, _weeks_ts
+    now = monotonic()
+    if _weeks is None or (now - _weeks_ts) > _WEEK_TTL:
+        with _lock:
+            if _weeks is None or (monotonic() - _weeks_ts) > _WEEK_TTL:
+                _weeks = list_weeks()
+                _weeks_ts = monotonic()
+    return _weeks
 
 
 def cached_access() -> dict[str, set[str]]:
@@ -108,13 +123,14 @@ def invalidate_access() -> None:
 
 def invalidate_all() -> None:
     """Full cache clear — call when a new week is opened."""
-    global _current_week, _access
+    global _current_week, _access, _weeks
     with _lock:
         _submissions_cache.clear()
         _drafts_cache.clear()
         _gli_cache.clear()
         _current_week = None
         _access = None
+        _weeks = None
 
 
 _CACHE_TTL = 300  # secondi

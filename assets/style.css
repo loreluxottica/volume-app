@@ -115,6 +115,8 @@ body {
   letter-spacing: 0.05em; font-family: var(--mono);
 }
 .today-label { font-size: 11px; color: var(--text-3); font-family: var(--mono); }
+.week-badge-past { background: var(--amber, #b45309); color: #fff; }
+.week-dropdown { font-family: var(--font); font-size: 12px; font-weight: 500; }
 
 /* Product line tabs */
 .pl-tabs { display: flex; gap: 3px; }
@@ -133,6 +135,15 @@ body {
 
 /* Read-only banner */
 .readonly-banner {
+  background: var(--amber-bg);
+  border-bottom: 1px solid var(--amber-border);
+  padding: 7px 24px;
+  font-size: 11px; color: var(--amber);
+  display: flex; align-items: center; gap: 8px;
+}
+
+/* Past-week (delay) banner */
+.pastweek-banner {
   background: var(--amber-bg);
   border-bottom: 1px solid var(--amber-border);
   padding: 7px 24px;
