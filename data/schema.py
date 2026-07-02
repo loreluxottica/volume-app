@@ -10,6 +10,7 @@ COLS_FRAMES = [
     {"id": "rop_samples", "label": "ROP Smp"},
     {"id": "whls_gross",  "label": "WHLS Gross"},
     {"id": "whls_net",    "label": "WHLS Net"},
+    {"id": "whls_net_ow_emea", "label": "WHLS Net ow EMEA"},
     {"id": "retail",      "label": "Retail"},
     {"id": "gvi",         "label": "GVI"},
     {"id": "ds_na",       "label": "DS NA"},
@@ -92,63 +93,63 @@ ROW_BY_ID = {r["id"]: r for r in ROWS}
 NA_FRAMES_BY_SITE: dict[str, dict[str, list[str]]] = {
     "SEDICO": {
         "py":      ["rop_samples"],
-        "siop":    ["rop_samples", "whls_net"],
+        "siop":    ["rop_samples", "whls_net", "whls_net_ow_emea"],
         "mon_frc": ["rop_samples"],
         "thu_frc": ["rop_samples"],
         "fri_frc": ["rop_samples"],
         "actual":  ["rop_samples"],
-        "eow_wip": ["rop_samples", "whls_net"],
-        "wip_ot":  ["rop_samples", "whls_net"],
+        "eow_wip": ["rop_samples", "whls_net", "whls_net_ow_emea"],
+        "wip_ot":  ["rop_samples", "whls_net", "whls_net_ow_emea"],
     },
     "ATLANTA": {
-        "py":      ["rop_samples", "gvi", "ds_na", "sample"],
-        "siop":    ["rop_samples", "whls_net", "gvi", "ds_na", "sample"],
-        "mon_frc": ["rop_samples", "gvi", "ds_na", "sample"],
-        "thu_frc": ["rop_samples", "gvi", "ds_na", "sample"],
-        "fri_frc": ["rop_samples", "gvi", "ds_na", "sample"],
-        "actual":  ["rop_samples", "gvi", "ds_na", "sample"],
-        "eow_wip": ["rop_samples", "whls_net", "gvi", "ds_na", "sample"],
-        "wip_ot":  ["rop_samples", "whls_net", "gvi", "ds_na", "sample"],
+        "py":      ["rop_samples", "whls_net_ow_emea", "gvi", "ds_na", "sample"],
+        "siop":    ["rop_samples", "whls_net", "whls_net_ow_emea", "gvi", "ds_na", "sample"],
+        "mon_frc": ["rop_samples", "whls_net_ow_emea", "gvi", "ds_na", "sample"],
+        "thu_frc": ["rop_samples", "whls_net_ow_emea", "gvi", "ds_na", "sample"],
+        "fri_frc": ["rop_samples", "whls_net_ow_emea", "gvi", "ds_na", "sample"],
+        "actual":  ["rop_samples", "whls_net_ow_emea", "gvi", "ds_na", "sample"],
+        "eow_wip": ["rop_samples", "whls_net", "whls_net_ow_emea", "gvi", "ds_na", "sample"],
+        "wip_ot":  ["rop_samples", "whls_net", "whls_net_ow_emea", "gvi", "ds_na", "sample"],
     },
     "TIJUANA": {
-        "py":      ["rop_std","rop_samples", "gvi", "ds_na", "sample"],
-        "siop":    ["rop_std","rop_samples", "whls_net", "gvi", "ds_na", "sample"],
-        "mon_frc": ["rop_std","rop_samples", "gvi", "ds_na", "sample"],
-        "thu_frc": ["rop_std","rop_samples", "gvi", "ds_na", "sample"],
-        "fri_frc": ["rop_std","rop_samples", "gvi", "ds_na", "sample"],
-        "actual":  ["rop_std","rop_samples", "gvi", "ds_na", "sample"],
-        "eow_wip": ["rop_std","rop_samples", "whls_net", "gvi", "ds_na", "sample"],
-        "wip_ot":  ["rop_std","rop_samples", "whls_net", "gvi", "ds_na", "sample"],
+        "py":      ["rop_std","rop_samples", "whls_net_ow_emea", "gvi", "ds_na", "sample"],
+        "siop":    ["rop_std","rop_samples", "whls_net", "whls_net_ow_emea", "gvi", "ds_na", "sample"],
+        "mon_frc": ["rop_std","rop_samples", "whls_net_ow_emea", "gvi", "ds_na", "sample"],
+        "thu_frc": ["rop_std","rop_samples", "whls_net_ow_emea", "gvi", "ds_na", "sample"],
+        "fri_frc": ["rop_std","rop_samples", "whls_net_ow_emea", "gvi", "ds_na", "sample"],
+        "actual":  ["rop_std","rop_samples", "whls_net_ow_emea", "gvi", "ds_na", "sample"],
+        "eow_wip": ["rop_std","rop_samples", "whls_net", "whls_net_ow_emea", "gvi", "ds_na", "sample"],
+        "wip_ot":  ["rop_std","rop_samples", "whls_net", "whls_net_ow_emea", "gvi", "ds_na", "sample"],
     },
     "DONGGUAN": {
-        "py":      ["sample"],
-        "siop":    ["whls_net", "sample"],
-        "mon_frc": ["sample"],
-        "thu_frc": ["sample"],
-        "fri_frc": ["sample"],
-        "actual":  ["sample"],
-        "eow_wip": ["whls_net", "sample"],
-        "wip_ot":  ["whls_net", "sample"],
+        "py":      ["whls_net_ow_emea", "sample"],
+        "siop":    ["whls_net", "whls_net_ow_emea", "sample"],
+        "mon_frc": ["whls_net_ow_emea", "sample"],
+        "thu_frc": ["whls_net_ow_emea", "sample"],
+        "fri_frc": ["whls_net_ow_emea", "sample"],
+        "actual":  ["whls_net_ow_emea", "sample"],
+        "eow_wip": ["whls_net", "whls_net_ow_emea", "sample"],
+        "wip_ot":  ["whls_net", "whls_net_ow_emea", "sample"],
     },
     "RAYONG": {
-        "py":      ["whls_gross", "whls_net", "retail", "gvi", "ecom", "sample"],
-        "siop":    ["whls_gross", "whls_net", "retail", "gvi", "ecom", "sample"],
-        "mon_frc": ["whls_gross", "whls_net", "retail", "gvi", "ecom", "sample"],
-        "thu_frc": ["whls_gross", "whls_net", "retail", "gvi", "ecom", "sample"],
-        "fri_frc": ["whls_gross", "whls_net", "retail", "gvi", "ecom", "sample"],
-        "actual":  ["whls_gross", "whls_net", "retail", "gvi", "ecom", "sample"],
-        "eow_wip": ["whls_gross", "whls_net", "retail", "gvi", "ecom", "sample"],
-        "wip_ot":  ["whls_gross", "whls_net", "retail", "gvi", "ecom", "sample"],
+        "py":      ["rop_samples", "whls_gross", "whls_net", "whls_net_ow_emea", "retail", "gvi", "ecom", "sample"],
+        "siop":    ["rop_samples", "whls_gross", "whls_net", "whls_net_ow_emea", "retail", "gvi", "ecom", "sample"],
+        "mon_frc": ["rop_samples", "whls_gross", "whls_net", "whls_net_ow_emea", "retail", "gvi", "ecom", "sample"],
+        "thu_frc": ["rop_samples", "whls_gross", "whls_net", "whls_net_ow_emea", "retail", "gvi", "ecom", "sample"],
+        "fri_frc": ["rop_samples", "whls_gross", "whls_net", "whls_net_ow_emea", "retail", "gvi", "ecom", "sample"],
+        "actual":  ["rop_samples", "whls_gross", "whls_net", "whls_net_ow_emea", "retail", "gvi", "ecom", "sample"],
+        "eow_wip": ["rop_samples", "whls_gross", "whls_net", "whls_net_ow_emea", "retail", "gvi", "ecom", "sample"],
+        "wip_ot":  ["rop_samples", "whls_gross", "whls_net", "whls_net_ow_emea", "retail", "gvi", "ecom", "sample"],
     },
     "SUMARE": {
-        "py":      ["ds_na", "sample"],
-        "siop":    ["gvi", "ds_na", "sample"],
-        "mon_frc": ["ds_na", "sample"],
-        "thu_frc": ["ds_na", "sample"],
-        "fri_frc": ["ds_na", "sample"],
-        "actual":  ["ds_na", "sample"],
-        "eow_wip": ["whls_net", "ds_na", "sample"],
-        "wip_ot":  ["ds_na", "sample"],
+        "py":      ["whls_net_ow_emea", "ds_na", "sample"],
+        "siop":    ["whls_net_ow_emea", "gvi", "ds_na", "sample"],
+        "mon_frc": ["whls_net_ow_emea", "ds_na", "sample"],
+        "thu_frc": ["whls_net_ow_emea", "ds_na", "sample"],
+        "fri_frc": ["whls_net_ow_emea", "ds_na", "sample"],
+        "actual":  ["whls_net_ow_emea", "ds_na", "sample"],
+        "eow_wip": ["whls_net", "whls_net_ow_emea", "ds_na", "sample"],
+        "wip_ot":  ["whls_net_ow_emea", "ds_na", "sample"],
     },
 }
 
@@ -231,13 +232,13 @@ NA_BY_SITE: dict[str, dict[str, dict[str, list[str]]]] = {
 # for siop / eow_wip / wip_ot; Wearables has no N/A cell.
 NA_GLOBAL_FRAMES: dict[str, list[str]] = {
     "py":      [],
-    "siop":    ["whls_net"],
+    "siop":    ["whls_net", "whls_net_ow_emea"],
     "mon_frc": [],
     "thu_frc": [],
     "fri_frc": [],
     "actual":  [],
-    "eow_wip": ["whls_net"],
-    "wip_ot":  ["whls_net"],
+    "eow_wip": ["whls_net", "whls_net_ow_emea"],
+    "wip_ot":  ["whls_net", "whls_net_ow_emea"],
 }
 NA_GLOBAL_WEARABLES: dict[str, list[str]] = {
     "py":      [],
@@ -293,6 +294,29 @@ SITE_OWNERS = {
     "RAYONG":   "Jirawat",
     "SUMARE":   "Eduarda",
 }
+
+# ── Landings recap page ───────────────────────────────────────────────────────
+# Macro-column groups of the recap table: (group_id, label, member plants).
+# RAYONG is deliberately absent — its whls_net is fully N/A (matches the Excel
+# report which has no RAYONG group). TOTAL is computed as the sum of these.
+LANDINGS_GROUPS: list[tuple[str, str, list[str]]] = [
+    ("SEDICO", "SEDICO",         ["SEDICO"]),
+    ("NA",     "NA (ATL + TIJ)", ["ATLANTA", "TIJUANA"]),
+    ("LHKS",   "LHKS",           ["DONGGUAN"]),
+    ("SUMARE", "SUMARE'",        ["SUMARE"]),
+]
+
+# Editable rows per section: (row_type, label prefix)
+LANDINGS_MONTH_ROWS   = [("business_frc", "BUSINESS FRC"), ("actual", "ACTUAL")]
+LANDINGS_QUARTER_ROWS = [("business_frc", "BUSINESS FRC"), ("logistics_frc", "LOGISTICS FRC")]
+
+# Metrics: "py"/"cy" editable per group; "py_emea"/"cy_emea" only under SEDICO
+LANDINGS_METRICS      = ["py", "cy"]
+LANDINGS_EMEA_METRICS = ["py_emea", "cy_emea"]
+
+MONTH_LABELS = ["JANUARY", "FEBRUARY", "MARCH", "APRIL", "MAY", "JUNE",
+                "JULY", "AUGUST", "SEPTEMBER", "OCTOBER", "NOVEMBER", "DECEMBER"]
+
 
 # Comment pre-sets for Friday FRC variance
 COMMENT_PRESETS = [

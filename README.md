@@ -61,6 +61,17 @@ line (Frames / Wearables). Ogni riga si salva come bozza (Save) o si conferma
 - **Vista GLOBAL** in sola lettura — somma di tutti i plant.
 - **Permessi** — lettura su tutti i siti, scrittura solo sul proprio
   (tabella `app_access`).
+- **Pagina Landings** (tab "Landings") — replica del report Excel "Landings
+  siop": grafico Shipped CY vs PY per settimana (somma `whls_net` Frames di
+  tutti i plant; CY = riga Actual, PY = riga PY) + tabella recap con macro
+  colonne TOTAL / SEDICO / NA (ATL+TIJ) / LHKS (=DONGGUAN) / SUMARE', ognuna
+  con PY | CY | D%. La sezione **WK** è read-only dal DB (Business = Monday
+  FRC, Logistics = Friday FRC); le sezioni **Month** e **Quarter** sono
+  editabili da **tutti** gli utenti (dropdown periodo + Save) e persistite
+  nella tabella condivisa `landings_entries` (ultimo salvataggio vince).
+  TOTAL e D% sono calcolati. Le sotto-righe "of which EMEA" (solo SEDICO)
+  leggono il nuovo canale Frames `whls_net_ow_emea` ("WHLS Net ow EMEA"),
+  compilabile solo da SEDICO e N/A per gli altri plant.
 
 ## Deploy
 
@@ -161,9 +172,30 @@ $env:TEST_PRODUCT_LINE = "<product-line>"
 Lo script salva un draft di test nella tabella `drafts` e lo cancella subito dopo.
 Se la scrittura fallisce, vedrai l'errore restituito dalla connessione SQL.
 
-## Schema Delta Lake atteso
+## Schema DB
 
-Tabelle in Unity Catalog sotto `sbx-logistics.volume-data-entry-app`:
+> **Nota**: dal 2026-05 il DB è **Lakebase (PostgreSQL)** — database
+> `databricks_postgres`, schema `volume_data_entry` (vedi `data/db.py`).
+> Il DDL sotto è la forma storica Delta Lake delle 4 tabelle originali;
+> le colonne sono le stesse (tipi Postgres: TEXT/DOUBLE PRECISION/TIMESTAMPTZ).
+
+Tabelle: `weeks`, `submissions`, `drafts`, `app_access`, `landings_entries`.
+
+```sql
+-- volume_data_entry.landings_entries — valori Month/Quarter della pagina
+-- Landings, condivisi tra tutti gli utenti (upsert, ultimo salvataggio vince)
+CREATE TABLE IF NOT EXISTS volume_data_entry.landings_entries (
+  period_type TEXT NOT NULL CHECK (period_type IN ('month','quarter')),
+  period_key  TEXT NOT NULL,   -- '2026-06' | '2026-Q2'
+  row_type    TEXT NOT NULL,   -- 'business_frc' | 'actual' | 'logistics_frc'
+  col_group   TEXT NOT NULL,   -- 'SEDICO' | 'NA' | 'LHKS' | 'SUMARE'
+  metric      TEXT NOT NULL,   -- 'py' | 'cy' | 'py_emea' | 'cy_emea'
+  value_kpcs  DOUBLE PRECISION,
+  updated_by  TEXT,
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (period_key, row_type, col_group, metric)
+);
+```
 
 ```sql
 -- `sbx-logistics`.`volume-data-entry-app`.weeks

@@ -174,7 +174,7 @@ body {
 
 /* table-layout:fixed + <colgroup> → data columns share the width equally
    (uniform), and width:100% makes the table fill the screen. */
-.vol-table { border-collapse: collapse; table-layout: fixed; width: 100%; min-width: 1180px; }
+.vol-table { border-collapse: collapse; table-layout: fixed; width: 100%; min-width: 1260px; }
 
 .th-section {
   background: var(--navy); color: var(--navy-text2);
@@ -250,9 +250,14 @@ body {
   text-align: right; font-size: 12px; font-family: var(--mono);
   color: var(--text); padding: 4px 5px; outline: none; border-radius: 3px;
   -moz-appearance: textfield;
+  -webkit-appearance: none;
+  appearance: none;
 }
 .num-input::-webkit-outer-spin-button,
-.num-input::-webkit-inner-spin-button { -webkit-appearance: none; }
+.num-input::-webkit-inner-spin-button { -webkit-appearance: none !important; appearance: none !important; margin: 0; display: none !important; }
+input[type=number]::-webkit-outer-spin-button,
+input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none !important; appearance: none !important; margin: 0; display: none !important; }
+input[type=number] { -moz-appearance: textfield; appearance: textfield; }
 .num-input:focus { background: rgba(55,138,221,0.09); }
 .num-input:disabled { opacity: 0.38; cursor: not-allowed; }
 .num-input-ref { opacity: 0.6; cursor: default; color: var(--text-2); }
@@ -456,3 +461,113 @@ body {
 
 /* Dash component overrides */
 .Select-control, .Select-menu-outer { font-family: var(--font) !important; font-size: 13px !important; }
+
+/* ── LANDINGS RECAP PAGE (Excel-like) ─────────────────── */
+.landings-wrap {
+  background: #ffffff;
+  padding: 18px 24px 32px;
+  display: flex; flex-direction: column; gap: 16px;
+  min-height: calc(100vh - 110px);
+}
+
+/* Chart card — dark title bar + thin black frame, like the report header */
+.landings-chart-card { border: 1px solid #000; background: #ffffff; }
+.landings-chart-title {
+  background: #111111; color: #ffffff;
+  font-size: 12px; font-weight: 700; font-style: italic;
+  text-align: center; padding: 5px 10px;
+  border-bottom: 1px solid #000;
+}
+
+/* Toolbar — controls live here so the table stays clean for screenshots */
+.landings-toolbar {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 6px 0;
+}
+.landings-ctl-label { font-size: 11px; font-weight: 600; color: var(--text-2); }
+.landings-ctl-gap { margin-left: 18px; }
+.landings-period-dd { min-width: 150px; font-family: var(--font); font-size: 12px; }
+.landings-save-btn { width: auto; padding: 5px 14px; }
+
+/* Recap table — single table, detached rows via vertical border-spacing */
+.recap-table {
+  border-collapse: separate; border-spacing: 0 3px;
+  table-layout: fixed; width: 100%; min-width: 1100px;
+  background: #ffffff;
+  font-family: var(--font);
+}
+
+/* Header */
+.recap-empty-th { border: none; background: #ffffff; }
+.recap-macro-th {
+  background: #efefef; color: #000;
+  border: 1px solid #000;
+  font-size: 11px; font-weight: 600; letter-spacing: 0.03em;
+  text-transform: uppercase; text-align: center; padding: 5px 6px;
+}
+.recap-macro-total { font-weight: 800; border-width: 2px; }
+.recap-sub-th {
+  background: #ffffff; color: #333;
+  font-size: 9px; font-weight: 600; text-align: center;
+  padding: 2px 4px; border: none;
+}
+.recap-sub-cy { background: #efefef; }
+
+/* Vertical section label (WK 22 / MAY / Q2) */
+.recap-vlabel {
+  background: #e0e0e0; border: 1px solid #000;
+  vertical-align: middle; text-align: center; padding: 2px;
+}
+.recap-vlabel-text {
+  writing-mode: vertical-rl; transform: rotate(180deg);
+  font-size: 10px; font-weight: 700; letter-spacing: 0.08em;
+  text-transform: uppercase; color: #222;
+  margin: 0 auto; white-space: nowrap;
+}
+
+/* Row label boxes — uniform 26px row height across the whole table */
+.recap-row-label {
+  background: #efefef; border: 1px solid #000;
+  height: 26px; padding: 0 12px; font-weight: 700; font-size: 11px;
+  text-transform: uppercase; white-space: nowrap;
+  vertical-align: middle;
+}
+.recap-row-label-act { background: #d9d9d9; }
+.recap-emea-label {
+  border: none; background: #ffffff;
+  height: 26px; padding: 0 10px; font-size: 10px; font-style: italic;
+  text-align: right; white-space: nowrap; color: #222;
+  vertical-align: middle;
+}
+
+/* Value cells — each group of 3 shares one black-bordered box */
+.recap-td {
+  background: #ffffff;
+  border-top: 1px solid #000; border-bottom: 1px solid #000;
+  height: 26px; padding: 0 4px; vertical-align: middle;
+}
+.recap-cell-first { border-left: 1px solid #000; border-right: 1px solid #cfcfcf; }
+.recap-cell-mid   { border-right: 1px solid #cfcfcf; background: #efefef; }
+.recap-cell-last  { border-right: 1px solid #000; }
+.recap-cell-act   { background: #d9d9d9; }
+
+/* Blank cells (EMEA rows outside SEDICO, TOTAL of EMEA) — pure white, no box */
+.recap-blank { border: none; background: #ffffff; height: 26px; }
+
+/* Values */
+.recap-row { height: 26px; }
+.recap-val {
+  font-size: 11.5px; font-family: var(--mono); color: #000;
+  text-align: right; padding: 0 4px; display: block; line-height: 26px;
+}
+.recap-input { font-size: 11.5px; padding: 2px 4px; color: #000; height: 26px; box-sizing: border-box; }
+.recap-input::placeholder { color: transparent; }
+.recap-d-pct {
+  font-size: 10.5px; font-family: var(--mono); color: #000;
+  text-align: right; padding: 2px 4px; display: block; font-weight: 600;
+}
+.recap-d-neg { color: #a32d2d; }
+.recap-d-pos { color: #3b6d11; }
+
+/* Spacer between WK / MONTH / QUARTER sections */
+.recap-spacer-td { border: none; background: #ffffff; height: 12px; }

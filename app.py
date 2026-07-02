@@ -15,16 +15,20 @@
 from __future__ import annotations
 
 import json
+from datetime import date
 
 import dash
 from dash import Input, Output, State, ctx, dcc, html, ALL, Patch
 
 from components.header import render_topbar, render_app_header
 from components.data_table import render_data_table
+from components.landings import render_landings
 from data import cache, db
 from data.schema import (
     ROWS, COLS_BY_PL, cols_for, na_matrix, SITES,
     DUMMY_SUBCOLS, DUMMY_PARENT,
+    LANDINGS_GROUPS, LANDINGS_MONTH_ROWS, LANDINGS_QUARTER_ROWS,
+    LANDINGS_METRICS, LANDINGS_EMEA_METRICS,
     cols_below_threshold, wip_ot_below_threshold, incomplete_cells,
     zero_cells_missing_comment, _is_zero_value,
 )
@@ -300,6 +304,126 @@ def _load_for_view(state: dict, site: str, pl: str) -> bool:
     return _load_slice(state, site, pl)
 
 
+# ── Landings loaders ──────────────────────────────────────────────────────────
+
+_PLANT_TO_GROUP = {p: gid for gid, _lbl, members in LANDINGS_GROUPS for p in members}
+
+
+def _default_period_keys(state: dict) -> None:
+    """Default the Month/Quarter dropdowns to today's month and quarter."""
+    land = state["landings"]
+    today = date.today()
+    year = current_week()["year"] or today.year
+    if not land.get("month_key"):
+        land["month_key"] = f"{year}-{today.month:02d}"
+    if not land.get("quarter_key"):
+        land["quarter_key"] = f"{year}-Q{(today.month - 1) // 3 + 1}"
+
+
+def _load_landings_weekly(state: dict) -> bool:
+    """
+    Aggregate the year's FRAMES whls_net submissions into the chart series and
+    the read-only WK block. Returns False on a DB read error (retried on the
+    next visit). Business FRC = mon_frc, Logistics FRC = fri_frc, PY = py row;
+    EMEA sub-rows come from the SEDICO-only whls_net_ow_emea channel.
+    """
+    land = state["landings"]
+    if land.get("weekly_loaded"):
+        return True
+    wk = current_week()
+    try:
+        df = cache.cached_landings_weekly(wk["year"])
+    except Exception as exc:
+        print(f"[warn] get_landings_weekly failed: {exc}")
+        return False
+
+    chart_py: dict[str, float] = {}
+    chart_cy: dict[str, float] = {}
+    wk_block: dict = {
+        "business":       {"py": {}, "cy": {}},
+        "logistics":      {"py": {}, "cy": {}},
+        "business_emea":  {},
+        "logistics_emea": {},
+    }
+    cur = wk["week_id"]
+    for _, r in df.iterrows():
+        v = _to_float(r["value_kpcs"])
+        if v is None:
+            continue
+        w, st, ch, site = int(r["week_id"]), r["submission_type"], r["channel"], r["site"]
+        if ch == "whls_net":
+            if st == "actual":
+                chart_cy[str(w)] = chart_cy.get(str(w), 0.0) + v
+            elif st == "py":
+                chart_py[str(w)] = chart_py.get(str(w), 0.0) + v
+        if w != cur:
+            continue
+        if ch == "whls_net":
+            gid = _PLANT_TO_GROUP.get(site)
+            if not gid:
+                continue
+            if st == "py":  # same PY reference for both WK rows
+                for row in ("business", "logistics"):
+                    wk_block[row]["py"][gid] = wk_block[row]["py"].get(gid, 0.0) + v
+            elif st == "mon_frc":
+                wk_block["business"]["cy"][gid] = wk_block["business"]["cy"].get(gid, 0.0) + v
+            elif st == "fri_frc":
+                wk_block["logistics"]["cy"][gid] = wk_block["logistics"]["cy"].get(gid, 0.0) + v
+        elif ch == "whls_net_ow_emea" and site == "SEDICO":
+            if st == "py":
+                wk_block["business_emea"]["py"]  = v
+                wk_block["logistics_emea"]["py"] = v
+            elif st == "mon_frc":
+                wk_block["business_emea"]["cy"] = v
+            elif st == "fri_frc":
+                wk_block["logistics_emea"]["cy"] = v
+
+    land["weekly"] = {"chart_py": chart_py, "chart_cy": chart_cy, "wk": wk_block}
+    land["weekly_loaded"] = True
+    return True
+
+
+def _load_landings_period(state: dict, period_type: str, period_key: str) -> bool:
+    """
+    Populate state["landings_values"][period_key] from the shared
+    landings_entries table. The full metric tree is skeleton-initialised first
+    so the clientside nested write never misses a path. Returns False on a DB
+    read error (the period is then retried on the next view).
+    """
+    if period_key in state["landings"]["loaded_periods"]:
+        return True
+    rows = LANDINGS_MONTH_ROWS if period_type == "month" else LANDINGS_QUARTER_ROWS
+    skel: dict = {}
+    for row_type, _lbl in rows:
+        skel[row_type] = {}
+        for gid, _l, _m in LANDINGS_GROUPS:
+            metrics = LANDINGS_METRICS + (LANDINGS_EMEA_METRICS if gid == "SEDICO" else [])
+            skel[row_type][gid] = {m: "" for m in metrics}
+
+    try:
+        df = cache.cached_landings_entries(period_key)
+    except Exception as exc:
+        print(f"[warn] get_landings_entries failed for {period_key}: {exc}")
+        return False
+    for _, r in df.iterrows():
+        rt, gid, m = r["row_type"], r["col_group"], r["metric"]
+        if rt in skel and gid in skel[rt] and m in skel[rt][gid]:
+            skel[rt][gid][m] = _fmt(r["value_kpcs"])
+
+    state["landings_values"][period_key] = skel
+    state["landings"]["loaded_periods"].append(period_key)
+    return True
+
+
+def _load_landings(state: dict) -> bool:
+    """Everything the Landings page needs: weekly aggregates + both periods."""
+    _default_period_keys(state)
+    ok_weekly  = _load_landings_weekly(state)
+    ok_month   = _load_landings_period(state, "month", state["landings"]["month_key"])
+    ok_quarter = _load_landings_period(state, "quarter", state["landings"]["quarter_key"])
+    return ok_weekly and ok_month and ok_quarter
+
+
 def _row_has_data(state: dict, site: str, pl: str, row_id: str) -> bool:
     """True if the row has at least one non-empty, non-N/A cell."""
     na_cols = na_matrix(site, pl).get(row_id, [])
@@ -363,6 +487,7 @@ def _empty_state() -> dict:
         "week_id":        0,        # selected week (set by bootstrap = open week)
         "week_year":      0,
         "pending_delay":  None,     # {"row": ...} awaiting past-week confirm
+        "page":           "entry",  # "entry" (grid) | "landings" (recap page)
         "fri_open":       False,
         "submit_attempted": False,
         "user":           "",      # signed-in email (set by bootstrap)
@@ -383,6 +508,14 @@ def _empty_state() -> dict:
         "actual_open":    {},   # {site: {pl: bool}}
         "thu_comments":   {},   # {site: {pl: {col_id: {"presets":[], "others":""}}}}
         "thu_open":       {},   # {site: {pl: bool}}
+        "landings": {           # Landings recap page (read-only weekly data)
+            "month_key":      "",   # "2026-06" — defaulted on first visit
+            "quarter_key":    "",   # "2026-Q2"
+            "loaded_periods": [],   # period_keys fetched from the DB
+            "weekly_loaded":  False,
+            "weekly":         {},   # {"chart_py": {wk: v}, "chart_cy": {...}, "wk": {...}}
+        },
+        "landings_values": {},  # {period_key: {row_type: {group: {metric: str}}}} — editable
     }
     for s in SITES:
         state["values"][s]           = {}
@@ -421,7 +554,8 @@ def _empty_state() -> dict:
 # Callbacks merge the two into one dict, run the existing logic, then split the
 # result back — so the DB/state helpers stay unchanged.
 
-_FORM_KEYS = ("values", "fri_comments", "wip_ot_comments", "actual_comments", "thu_comments")
+_FORM_KEYS = ("values", "fri_comments", "wip_ot_comments", "actual_comments",
+              "thu_comments", "landings_values")
 
 
 def _form_part(s: dict) -> dict:
@@ -584,6 +718,22 @@ def render_ui(app_data: dict, form_data: dict):
         )
         return topbar, html.Div(), loading
 
+    if state.get("page") == "landings":
+        wk = current_week()
+        header = render_app_header(
+            current_site=state["site"], current_pl=state["pl"],
+            week_id=wk["week_id"], year=wk["year"],
+            is_readonly=False, page="landings",
+        )
+        body = render_landings(
+            week_id=wk["week_id"], year=wk["year"],
+            weekly=state.get("landings", {}).get("weekly", {}),
+            landings_values=state.get("landings_values", {}),
+            month_key=state["landings"].get("month_key", ""),
+            quarter_key=state["landings"].get("quarter_key", ""),
+        )
+        return topbar, header, body
+
     site     = state["site"]
     pl       = state["pl"]
     is_ro    = not _can_edit(site, state)
@@ -670,11 +820,12 @@ def change_site(site: str, app_data: dict, form_data: dict):
     Output("toast-store", "data", allow_duplicate=True),
     Input("tab-frames",    "n_clicks"),
     Input("tab-wearables", "n_clicks"),
+    Input("tab-landings",  "n_clicks"),
     State("app-state", "data"),
     State("form-values", "data"),
     prevent_initial_call=True,
 )
-def switch_pl(n_frames, n_wear, app_data: dict, form_data: dict):
+def switch_pl(n_frames, n_wear, n_landings, app_data: dict, form_data: dict):
     state = _merge(app_data, form_data)
     triggered = ctx.triggered_id
     # Guard: a header re-render re-sets n_clicks=0 on the tab buttons, which
@@ -684,9 +835,23 @@ def switch_pl(n_frames, n_wear, app_data: dict, form_data: dict):
         return dash.no_update, dash.no_update, dash.no_update
     if triggered == "tab-wearables" and not n_wear:
         return dash.no_update, dash.no_update, dash.no_update
-    new_pl = "FRAMES" if triggered == "tab-frames" else "WEARABLES"
-    if new_pl == state["pl"]:
+    if triggered == "tab-landings" and not n_landings:
         return dash.no_update, dash.no_update, dash.no_update
+
+    if triggered == "tab-landings":
+        if state.get("page") == "landings":
+            return dash.no_update, dash.no_update, dash.no_update
+        state["page"] = "landings"
+        ok = _load_landings(state)
+        return (_app_part(state), _form_part(state),
+                "" if ok else "⚠ Could not load Landings data.")
+
+    new_pl = "FRAMES" if triggered == "tab-frames" else "WEARABLES"
+    # Clicking Frames/Wearables while on Landings must switch back even when
+    # the product line is unchanged.
+    if new_pl == state["pl"] and state.get("page", "entry") == "entry":
+        return dash.no_update, dash.no_update, dash.no_update
+    state["page"]     = "entry"
     state["pl"]       = new_pl
     state["fri_open"] = False
     state["submit_attempted"] = False
@@ -729,6 +894,223 @@ app.clientside_callback(
     State("form-values", "data"),
     prevent_initial_call=True,
 )
+
+
+# ── Landings input callback (CLIENTSIDE) ──────────────────────────────────────
+# Same rationale as the row-input callback: typed values land in `form-values`
+# synchronously in the browser, so a Save click always sees the latest values.
+# The full address (period/row/group/metric) is in the pattern id — no site/pl
+# indirection needed.
+
+app.clientside_callback(
+    """
+    function(values, form_data) {
+        if (!form_data) return window.dash_clientside.no_update;
+        var trig = window.dash_clientside.callback_context.triggered;
+        if (!trig || trig.length === 0) return window.dash_clientside.no_update;
+        var nf = JSON.parse(JSON.stringify(form_data));
+        for (var i = 0; i < trig.length; i++) {
+            var pid = trig[i].prop_id;
+            var idStr = pid.substring(0, pid.lastIndexOf('.'));
+            var idObj;
+            try { idObj = JSON.parse(idStr); } catch (e) { continue; }
+            var v = trig[i].value;
+            var sv = (v === null || v === undefined) ? "" : String(v);
+            try {
+                nf.landings_values[idObj.period][idObj.row][idObj.group][idObj.metric] = sv;
+            } catch (e) { /* nested path missing — skip */ }
+        }
+        return nf;
+    }
+    """,
+    Output("form-values", "data", allow_duplicate=True),
+    Input({"type": "landings-input", "period": ALL, "row": ALL,
+           "group": ALL, "metric": ALL}, "value"),
+    State("form-values", "data"),
+    prevent_initial_call=True,
+)
+
+
+# ── Landings D% live update (CLIENTSIDE) ──────────────────────────────────────
+# When any editable cell changes, recompute: group D%, TOTAL PY/CY, TOTAL D%.
+# Group IDs are hardcoded in JS (same order as LANDINGS_GROUPS in schema.py).
+
+app.clientside_callback(
+    """
+    function(inputValues) {
+        var ctx = window.dash_clientside.callback_context;
+        if (!ctx.inputs_list || !ctx.inputs_list[0]) return [[], [], []];
+        var inputIds = ctx.inputs_list[0];
+        var outputsAll = ctx.outputs_list;
+
+        var lookup = {};
+        inputIds.forEach(function(item, i) {
+            var id = item.id;
+            var key = id.period + '|' + id.row + '|' + id.group + '|' + id.metric;
+            var v = inputValues[i];
+            var num = +v;
+            lookup[key] = (v == null || v === '' || isNaN(num)) ? null : num;
+        });
+
+        var GROUPS = ["SEDICO", "NA", "LHKS", "SUMARE"];
+
+        function calcD(py, cy) {
+            if (py === null || cy === null || py === 0 || isNaN(py) || isNaN(cy))
+                return ['', 'recap-d-pct'];
+            var d = (cy - py) / py;
+            var txt = (d * 100).toFixed(1).replace('.', ',') + '%';
+            var cls = d < 0 ? 'recap-d-pct recap-d-neg' : d > 0 ? 'recap-d-pct recap-d-pos' : 'recap-d-pct';
+            return [txt, cls];
+        }
+
+        function sumGroups(id, pyM, cyM) {
+            var py = null, cy = null;
+            GROUPS.forEach(function(g) {
+                var pv = lookup[id.period+'|'+id.row+'|'+g+'|'+pyM];
+                var cv = lookup[id.period+'|'+id.row+'|'+g+'|'+cyM];
+                if (pv != null) py = (py || 0) + pv;
+                if (cv != null) cy = (cy || 0) + cv;
+            });
+            return [py, cy];
+        }
+
+        function fmtNum(v) {
+            if (v == null || isNaN(v)) return '';
+            var s = Math.round(v).toString();
+            return s.replace(/\\B(?=(\\d{3})+(?!\\d))/g, '.');
+        }
+
+        var dpctIds = outputsAll[0];
+        var totIds  = outputsAll[1];
+
+        var COLORS = {'neg': '#a32d2d', 'pos': '#3b6d11', 'neu': '#000'};
+
+        var dpctChildren = dpctIds.map(function(item) {
+            var id = item.id;
+            var isEmea = id.mtype === 'emea';
+            var pyM = isEmea ? 'py_emea' : 'py', cyM = isEmea ? 'cy_emea' : 'cy';
+            var pairPy, pairCy;
+            if (id.group === 'TOTAL') {
+                var s = sumGroups(id, pyM, cyM); pairPy = s[0]; pairCy = s[1];
+            } else {
+                pairPy = lookup[id.period+'|'+id.row+'|'+id.group+'|'+pyM];
+                pairCy = lookup[id.period+'|'+id.row+'|'+id.group+'|'+cyM];
+            }
+            var d = calcD(pairPy, pairCy);
+            var txt = d[0], cls = d[1];
+            if (!txt) return '';
+            var color = cls.indexOf('neg') >= 0 ? COLORS.neg : cls.indexOf('pos') >= 0 ? COLORS.pos : COLORS.neu;
+            return {type:'Span', namespace:'dash_html_components',
+                    props:{children: txt, style:{color: color}, className:'recap-d-pct'}};
+        });
+
+        var totChildren = totIds.map(function(item) {
+            var id = item.id;
+            var sum = null;
+            GROUPS.forEach(function(g) {
+                var v = lookup[id.period+'|'+id.row+'|'+g+'|'+id.metric];
+                if (v != null) sum = (sum || 0) + v;
+            });
+            return fmtNum(sum);
+        });
+
+        return [dpctChildren, totChildren];
+    }
+    """,
+    [
+        Output({"type": "landings-dpct",    "period": ALL, "row": ALL, "group": ALL, "mtype": ALL}, "children"),
+        Output({"type": "landings-tot-val", "period": ALL, "row": ALL, "metric": ALL}, "children"),
+    ],
+    Input({"type": "landings-input", "period": ALL, "row": ALL,
+           "group": ALL, "metric": ALL}, "value"),
+    prevent_initial_call=True,
+)
+
+
+# ── Landings period dropdowns ─────────────────────────────────────────────────
+# Guard: a re-render re-mounts the dropdown and fires the callback with the
+# already-selected value — the equality check makes that a no-op.
+
+@app.callback(
+    Output("app-state",   "data", allow_duplicate=True),
+    Output("form-values", "data", allow_duplicate=True),
+    Output("toast-store", "data", allow_duplicate=True),
+    Input("landings-month-select", "value"),
+    State("app-state", "data"),
+    State("form-values", "data"),
+    prevent_initial_call=True,
+)
+def change_landings_month(month_key, app_data: dict, form_data: dict):
+    state = _merge(app_data, form_data)
+    if not month_key or month_key == state.get("landings", {}).get("month_key"):
+        return dash.no_update, dash.no_update, dash.no_update
+    state["landings"]["month_key"] = month_key
+    ok = _load_landings_period(state, "month", month_key)
+    return (_app_part(state), _form_part(state),
+            "" if ok else f"⚠ Could not load {month_key}.")
+
+
+@app.callback(
+    Output("app-state",   "data", allow_duplicate=True),
+    Output("form-values", "data", allow_duplicate=True),
+    Output("toast-store", "data", allow_duplicate=True),
+    Input("landings-quarter-select", "value"),
+    State("app-state", "data"),
+    State("form-values", "data"),
+    prevent_initial_call=True,
+)
+def change_landings_quarter(quarter_key, app_data: dict, form_data: dict):
+    state = _merge(app_data, form_data)
+    if not quarter_key or quarter_key == state.get("landings", {}).get("quarter_key"):
+        return dash.no_update, dash.no_update, dash.no_update
+    state["landings"]["quarter_key"] = quarter_key
+    ok = _load_landings_period(state, "quarter", quarter_key)
+    return (_app_part(state), _form_part(state),
+            "" if ok else f"⚠ Could not load {quarter_key}.")
+
+
+# ── Landings save ─────────────────────────────────────────────────────────────
+# Editable by EVERY signed-in user by design (no _can_edit check): the recap
+# Month/Quarter values are shared figures, last write wins.
+
+@app.callback(
+    Output("app-state",   "data", allow_duplicate=True),
+    Output("toast-store", "data", allow_duplicate=True),
+    Input("btn-landings-month-save",   "n_clicks"),
+    Input("btn-landings-quarter-save", "n_clicks"),
+    State("app-state", "data"),
+    State("form-values", "data"),
+    prevent_initial_call=True,
+)
+def save_landings(n_month, n_quarter, app_data: dict, form_data: dict):
+    state = _merge(app_data, form_data)
+    triggered = ctx.triggered_id
+    if triggered == "btn-landings-month-save" and not n_month:
+        return dash.no_update, dash.no_update
+    if triggered == "btn-landings-quarter-save" and not n_quarter:
+        return dash.no_update, dash.no_update
+
+    period_type = "month" if triggered == "btn-landings-month-save" else "quarter"
+    period_key = state["landings"].get(
+        "month_key" if period_type == "month" else "quarter_key")
+    period_vals = (state.get("landings_values") or {}).get(period_key) or {}
+
+    entries: list[tuple] = []
+    for row_type, groups in period_vals.items():
+        for gid, metrics in groups.items():
+            for metric, raw in metrics.items():
+                entries.append((row_type, gid, metric, _to_float(raw)))
+    if not entries:
+        return dash.no_update, "⚠ Nothing to save."
+
+    try:
+        db.save_landings_entries(period_type, period_key, state["user"], entries)
+        cache.invalidate_landings_entries(period_key)
+    except Exception as exc:
+        return dash.no_update, f"⚠ Save failed — {exc}"
+
+    # Re-render so the computed TOTAL / D% cells pick up the saved values.
+    return _app_part(state), f"⤓ Landings {period_key} saved"
 
 
 # ── Panel input callback (CLIENTSIDE) ─────────────────────────────────────────
@@ -1897,7 +2279,12 @@ def refresh_cache(n, app_data: dict, form_data: dict):
     cache.invalidate_all()
     state["loaded"] = []
     state["global_loaded"] = []
-    ok = _load_for_view(state, state["site"], state["pl"])
+    state["landings"]["weekly_loaded"]  = False
+    state["landings"]["loaded_periods"] = []
+    if state.get("page") == "landings":
+        ok = _load_landings(state)
+    else:
+        ok = _load_for_view(state, state["site"], state["pl"])
     msg = "🥤 Cache refreshed" if ok else "⚠ Refresh failed — check DB connection"
     return _app_part(state), _form_part(state), msg
 
@@ -2055,4 +2442,4 @@ app.clientside_callback(
 if __name__ == "__main__":
     # Local dev only. On Databricks Apps the app is served by gunicorn
     # (see app.yaml), which imports `server` above instead of running this.
-    app.run(debug=True, port=8050)
+    app.run(debug=False, port=8050)

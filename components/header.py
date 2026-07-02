@@ -46,6 +46,7 @@ def render_app_header(
     is_readonly: bool,
     weeks: list[dict] | None = None,
     open_week_id: int | None = None,
+    page: str = "entry",
 ) -> html.Div:
     now = datetime.now()
     days   = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]   # now.weekday(): Mon=0
@@ -55,6 +56,7 @@ def render_app_header(
     iso_week    = week_id
     report_week = _report_week(week_id, year)
     is_past     = open_week_id is not None and week_id != open_week_id
+    on_landings = page == "landings"
 
     # Back-selector options: open week + every past week, newest first.
     week_options = []
@@ -71,7 +73,10 @@ def render_app_header(
             # Site selector — dcc.Dropdown so the value reaches the callbacks
             # (a plain html.Select does not report its value to Dash).
             # Plant name only; table-level access is enforced backend-side.
-            html.Div(className="field-group", children=[
+            # Hidden (but mounted, so callback ids keep existing) on Landings.
+            html.Div(className="field-group",
+                     style={"display": "none"} if on_landings else None,
+                     children=[
                 html.Div("Site", className="field-label"),
                 dcc.Dropdown(
                     id="site-select",
@@ -116,24 +121,30 @@ def render_app_header(
                     html.Button(
                         "Frames",
                         id="tab-frames",
-                        className=f"pl-tab{'  active' if current_pl == 'FRAMES' else ''}",
+                        className=f"pl-tab{'  active' if current_pl == 'FRAMES' and not on_landings else ''}",
                         n_clicks=0,
                     ),
                     html.Button(
                         "Wearables",
                         id="tab-wearables",
-                        className=f"pl-tab{'  active' if current_pl == 'WEARABLES' else ''}",
+                        className=f"pl-tab{'  active' if current_pl == 'WEARABLES' and not on_landings else ''}",
+                        n_clicks=0,
+                    ),
+                    html.Button(
+                        "Landings",
+                        id="tab-landings",
+                        className=f"pl-tab{'  active' if on_landings else ''}",
                         n_clicks=0,
                     ),
                 ]),
             ]),
         ]),
 
-        # Action buttons (hidden in read-only mode)
+        # Action buttons (hidden in read-only mode and on Landings)
         html.Div(
             id="header-actions",
             className="header-actions",
-            style={"display": "none" if is_readonly else "flex"},
+            style={"display": "none" if (is_readonly or on_landings) else "flex"},
             children=[
                 html.Button(
                     ["⤓ ", "Save all drafts"],
@@ -150,7 +161,8 @@ def render_app_header(
             ],
         ),
 
-        # CSV export — a read action, available also in read-only mode
+        # CSV export — a read action, available also in read-only mode.
+        # Hidden (but mounted) on Landings; Double Tap stays visible there.
         html.Div(
             className="header-export",
             children=[
@@ -159,6 +171,7 @@ def render_app_header(
                     id="btn-export-csv",
                     className="action-btn btn-save-all",
                     n_clicks=0,
+                    style={"display": "none"} if on_landings else None,
                 ),
                 html.Button(
                     ["⚠ ", "Double Tap ", "🥤"],
@@ -171,11 +184,11 @@ def render_app_header(
         ),
     ])
 
-    # Read-only banner
+    # Read-only banner (suppressed on Landings — that page is editable by all)
     banner = html.Div(
         id="readonly-banner",
         className="readonly-banner",
-        style={"display": "flex" if is_readonly else "none"},
+        style={"display": "flex" if (is_readonly and not on_landings) else "none"},
         children=[
             "👁 You are viewing ",
             html.Strong(current_site),

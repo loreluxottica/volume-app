@@ -48,6 +48,7 @@ def _T_WEEKS()       -> str: return f"{_pfx()}.weeks"
 def _T_SUBMISSIONS() -> str: return f"{_pfx()}.submissions"
 def _T_DRAFTS()      -> str: return f"{_pfx()}.drafts"
 def _T_ACCESS()      -> str: return f"{_pfx()}.app_access"
+def _T_LANDINGS()    -> str: return f"{_pfx()}.landings_entries"
 
 
 VOLUME_PATH = "/Volumes/sbx-logistics/volume-data-entry-app/app_volume"
@@ -408,6 +409,80 @@ def delete_draft(week_id: int, site: str, product_line: str,
           AND submission_type = %s AND user_id = %s
         """,
         [week_id, site, product_line, submission_type, user_id],
+    )
+
+
+# ── landings (recap page) ─────────────────────────────────────────────────────
+
+def get_landings_entries(period_key: str) -> pd.DataFrame:
+    """Return saved Month/Quarter recap values for a period ('2026-06' / '2026-Q2')."""
+    return _exec(
+        f"""
+        SELECT row_type, col_group, metric, value_kpcs
+        FROM {_T_LANDINGS()}
+        WHERE period_key = %s
+        """,
+        [period_key],
+    )
+
+
+def save_landings_entries(
+    period_type: str,
+    period_key: str,
+    user_id: str,
+    entries: list[tuple[str, str, str, float | None]],
+) -> None:
+    """Upsert recap values — entries = [(row_type, col_group, metric, value), ...].
+    Shared across users: last write wins on the natural key."""
+    if not entries:
+        return
+    now = datetime.now(timezone.utc)
+    placeholders = ", ".join(["(%s, %s, %s, %s, %s, %s, %s, %s)"] * len(entries))
+    params = []
+    for row_type, col_group, metric, value in entries:
+        params.extend([period_type, period_key, row_type, col_group, metric,
+                       value, user_id, now])
+    _run(
+        f"""
+        INSERT INTO {_T_LANDINGS()}
+          (period_type, period_key, row_type, col_group, metric,
+           value_kpcs, updated_by, updated_at)
+        VALUES {placeholders}
+        ON CONFLICT (period_key, row_type, col_group, metric)
+        DO UPDATE SET
+            value_kpcs = EXCLUDED.value_kpcs,
+            updated_by = EXCLUDED.updated_by,
+            updated_at = EXCLUDED.updated_at
+        """,
+        params,
+    )
+
+
+def get_landings_weekly(year: int) -> pd.DataFrame:
+    """Authoritative FRAMES whls_net / whls_net_ow_emea rows for every week of a
+    year (chart + WK block of the Landings page). Same ROW_NUMBER dedup as
+    get_gli_extract. Note: submissions has no year column — scoping via the
+    weeks table is the same approximation already used elsewhere."""
+    return _exec(
+        f"""
+        WITH ranked AS (
+            SELECT week_id, site, submission_type, channel, value_kpcs,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY week_id, site, submission_type, channel
+                       ORDER BY timestamp DESC
+                   ) AS rn
+            FROM {_T_SUBMISSIONS()}
+            WHERE official_log = TRUE
+              AND product_line = 'FRAMES'
+              AND channel IN ('whls_net', 'whls_net_ow_emea')
+              AND submission_type IN ('py', 'mon_frc', 'fri_frc', 'actual')
+              AND week_id IN (SELECT week_id FROM {_T_WEEKS()} WHERE year = %s)
+        )
+        SELECT week_id, site, submission_type, channel, value_kpcs
+        FROM ranked
+        WHERE rn = 1
+        """,
+        [year],
     )
 
 

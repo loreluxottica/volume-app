@@ -21,6 +21,8 @@ from data.db import (
     get_current_week,
     get_drafts,
     get_gli_extract,
+    get_landings_entries,
+    get_landings_weekly,
     get_latest_submissions,
     list_weeks,
 )
@@ -36,6 +38,9 @@ _access: dict[str, set[str]] | None = None
 _submissions_cache: dict[tuple, pd.DataFrame] = {}
 _drafts_cache: dict[tuple, pd.DataFrame] = {}
 _gli_cache: dict[int, pd.DataFrame] = {}
+_landings_entries_cache: dict[str, pd.DataFrame] = {}
+_landings_weekly: dict[int, pd.DataFrame] = {}
+_landings_weekly_ts: dict[int, float] = {}   # TTL via _is_stale (chart may lag ≤5 min)
 
 
 def cached_current_week() -> dict[str, Any]:
@@ -50,6 +55,8 @@ def cached_current_week() -> dict[str, Any]:
                     _submissions_cache.clear()
                     _drafts_cache.clear()
                     _gli_cache.clear()
+                    _landings_weekly.clear()
+                    _landings_weekly_ts.clear()
                 _current_week = fresh
                 _current_week_ts = monotonic()
     return _current_week
@@ -102,11 +109,37 @@ def cached_gli_extract(week_id: int) -> pd.DataFrame:
     return _gli_cache[week_id]
 
 
+def cached_landings_entries(period_key: str) -> pd.DataFrame:
+    if period_key not in _landings_entries_cache:
+        with _lock:
+            if period_key not in _landings_entries_cache:
+                _landings_entries_cache[period_key] = get_landings_entries(period_key)
+    return _landings_entries_cache[period_key]
+
+
+def cached_landings_weekly(year: int) -> pd.DataFrame:
+    if year not in _landings_weekly or _is_stale(year, _landings_weekly_ts):
+        with _lock:
+            if year not in _landings_weekly or _is_stale(year, _landings_weekly_ts):
+                _landings_weekly[year] = get_landings_weekly(year)
+                _landings_weekly_ts[year] = time.monotonic()
+    return _landings_weekly[year]
+
+
+def invalidate_landings_entries(period_key: str) -> None:
+    """Call after save_landings_entries."""
+    with _lock:
+        _landings_entries_cache.pop(period_key, None)
+
+
 def invalidate_submissions(week_id: int, site: str, product_line: str) -> None:
     """Call after submit_row — also drops GLOBAL extract since it changed."""
     with _lock:
         _submissions_cache.pop((week_id, site, product_line), None)
         _gli_cache.pop(week_id, None)
+        # A grid submit can change the Landings chart / WK block
+        _landings_weekly.clear()
+        _landings_weekly_ts.clear()
 
 
 def invalidate_drafts(week_id: int, site: str, product_line: str, user_id: str) -> None:
@@ -128,6 +161,9 @@ def invalidate_all() -> None:
         _submissions_cache.clear()
         _drafts_cache.clear()
         _gli_cache.clear()
+        _landings_entries_cache.clear()
+        _landings_weekly.clear()
+        _landings_weekly_ts.clear()
         _current_week = None
         _access = None
         _weeks = None
