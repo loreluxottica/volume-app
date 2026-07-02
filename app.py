@@ -447,16 +447,24 @@ app.layout = html.Div([
     dcc.Store(id="form-values", data=_form_part(_INIT_STATE)),
     # Toast notification store
     dcc.Store(id="toast-store", data=""),
-    # Past-week confirm modal + the pending submit it gates
-    dcc.ConfirmDialog(
-        id="delay-confirm",
-        message=(
-            "Attention — you are modifying data from a past week.\n\n"
-            "Submitting will record this as a delayed edit (delay = TRUE) with a "
-            "timestamp.\n\nDo you want to continue?"
-        ),
+    # Past-week confirm modal — custom overlay (blur backdrop + app-style card).
+    # Kept as a persistent layout element so button n_clicks survive re-renders.
+    html.Div(
+        id="delay-modal", className="modal-overlay", style={"display": "none"},
+        children=[
+            html.Div(className="modal-box", children=[
+                html.Div("⏱", className="modal-icon"),
+                html.Div("Modifying a past week", className="modal-title"),
+                html.Div(id="delay-modal-body", className="modal-text"),
+                html.Div(className="modal-actions", children=[
+                    html.Button("Cancel", id="btn-delay-cancel",
+                                className="action-btn btn-save-all", n_clicks=0),
+                    html.Button("Confirm delayed edit", id="btn-delay-confirm",
+                                className="action-btn btn-submit-all", n_clicks=0),
+                ]),
+            ]),
+        ],
     ),
-    dcc.Store(id="pending-delay", data=None),
     # Fires once on page load → the bootstrap callback (runs in a request ctx)
     dcc.Interval(id="boot-trigger", interval=200, max_intervals=1),
 
@@ -1109,7 +1117,7 @@ def _gate_submit(state: dict, site: str, pl: str, row_id: str):
             "row": row_id,
             "payload": {"values": values, "zero_flags": zero_flags, "comments": comments},
         }
-        return _app_part(state), "⏱ Confirm the delayed edit to submit this past week."
+        return _app_part(state), dash.no_update   # modal carries the message
     try:
         msg = _do_submit(state, site, pl, row_id, is_delay=False)
     except Exception as exc:
@@ -1779,7 +1787,7 @@ def bulk_action(n_save, n_submit, app_data: dict, form_data: dict):
     # Submit-all on a past week is gated by the same confirm modal.
     if not is_save and _is_delay(state):
         state["pending_delay"] = {"row": "__bulk__"}
-        return _app_part(state), "⏱ Confirm the delayed edit to submit this past week."
+        return _app_part(state), dash.no_update   # modal carries the message
 
     return _app_part(state), _run_bulk(state, site, pl, is_save, is_delay=False)
 
@@ -1789,30 +1797,39 @@ def bulk_action(n_save, n_submit, app_data: dict, form_data: dict):
 # modal whenever one is set, and clears when it is resolved.
 
 @app.callback(
-    Output("delay-confirm", "displayed"),
+    Output("delay-modal", "style"),
+    Output("delay-modal-body", "children"),
     Input("app-state", "data"),
     prevent_initial_call=True,
 )
 def toggle_delay_modal(app_data: dict):
-    return bool((app_data or {}).get("pending_delay"))
+    app_data = app_data or {}
+    if not app_data.get("pending_delay"):
+        return {"display": "none"}, dash.no_update
+    wk = app_data.get("week_id", 0)
+    rw = wk - 1 if wk and wk > 1 else 0
+    body = ["This edit targets ", html.Strong(f"WK {rw} | ISO WK {wk}"),
+            ", a past week. It will be recorded as a delayed edit "
+            "(delay = TRUE) with a timestamp. Continue?"]
+    return {"display": "flex"}, body
 
 
 @app.callback(
     Output("app-state",   "data", allow_duplicate=True),
     Output("toast-store", "data", allow_duplicate=True),
-    Input("delay-confirm", "submit_n_clicks"),
-    Input("delay-confirm", "cancel_n_clicks"),
+    Input("btn-delay-confirm", "n_clicks"),
+    Input("btn-delay-cancel",  "n_clicks"),
     State("app-state", "data"),
     State("form-values", "data"),
     prevent_initial_call=True,
 )
-def resolve_delay(_submit, _cancel, app_data: dict, form_data: dict):
+def resolve_delay(_confirm, _cancel, app_data: dict, form_data: dict):
     state   = _merge(app_data, form_data)
     pending = state.get("pending_delay")
-    trig    = ctx.triggered[0]["prop_id"] if ctx.triggered else ""
+    trig    = ctx.triggered_id
     state["pending_delay"] = None
 
-    if not pending or trig.endswith("cancel_n_clicks"):
+    if not pending or trig == "btn-delay-cancel":
         return _app_part(state), ("Delayed edit cancelled." if pending else dash.no_update)
 
     row      = pending.get("row")
