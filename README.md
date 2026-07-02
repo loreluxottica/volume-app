@@ -44,6 +44,20 @@ line (Frames / Wearables). Ogni riga si salva come bozza (Save) o si conferma
   si blocca ed evidenzia le celle incomplete.
 - **Zero esplicito** — la checkbox "Confirm zero" distingue lo zero voluto dalla
   cella non compilata. Le celle N/A sono bloccate e tratteggiate.
+- **Editing settimane passate + flag ritardo** — un selettore di settimana
+  nell'header (sotto il dropdown Site) permette di rivedere/correggere settimane
+  già chiuse. Al Submit di una settimana passata compare un **modal di conferma
+  custom** (backdrop sfocato, card con i design token dell'app) che nomina la
+  settimana selezionata; alla conferma la scrittura è marcata `is_delay = TRUE` +
+  `delay_timestamp`. I submit della settimana aperta restano `is_delay = FALSE`.
+  Il modal fa da gate a tutti i percorsi di Submit, incluso Submit-all.
+- **Display in migliaia (Kpcs)** — i valori sono mostrati in migliaia
+  (es. `265000` → `265`), senza `,0` finale.
+- **Separatore decimale virgola** — input, display e somme della vista GLOBAL
+  usano la virgola come separatore decimale.
+- **Colonna Dummy separata (Dongguan)** — la colonna Dummy di Dongguan Wearables
+  è splittata; header di colonna a capo e colonna azioni ridotta per farci stare
+  lo split.
 - **Vista GLOBAL** in sola lettura — somma di tutti i plant.
 - **Permessi** — lettura su tutti i siti, scrittura solo sul proprio
   (tabella `app_access`).
@@ -165,7 +179,8 @@ CREATE TABLE `sbx-logistics`.`volume-data-entry-app`.submissions (
   product_line STRING, user_id STRING, submission_type STRING, channel STRING,
   value_kpcs DOUBLE, is_zero_flagged BOOLEAN, official_log BOOLEAN,
   comment_preset STRING, comment_other STRING, is_amendment BOOLEAN,
-  ref_submission_id STRING
+  ref_submission_id STRING,
+  is_delay BOOLEAN DEFAULT FALSE, delay_timestamp TIMESTAMP
 )
 CLUSTER BY (week_id, site, product_line);
 
@@ -190,6 +205,10 @@ CREATE TABLE `sbx-logistics`.`volume-data-entry-app`.app_access (
 > (niente view). Le tabelle sono clusterizzate per `week_id` — vedi
 > `scripts/optimize_tables.sql` per il clustering e l'`OPTIMIZE`/`VACUUM`
 > schedulato (BBP v0.7 item #11).
+
+> Le colonne `is_delay` / `delay_timestamp` di `submissions` sono aggiunte via
+> `ALTER TABLE submissions ADD COLUMN ...` (già applicate su Lakebase); marcano le
+> scritture su settimane passate confermate dal modal di ritardo.
 
 ## Gestione accessi
 
