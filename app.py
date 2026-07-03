@@ -99,6 +99,8 @@ def _display_name(email: str) -> str:
 
 def _can_edit(site: str, state: dict) -> bool:
     """Whether the current user may edit the given site."""
+    if state.get("is_viewer"):
+        return False                        # VIEW role: read-only everywhere
     if site == GLOBAL_SITE:
         return False
     if state.get("is_admin"):
@@ -367,6 +369,7 @@ def _empty_state() -> dict:
         "submit_attempted": False,
         "user":           "",      # signed-in email (set by bootstrap)
         "is_admin":       False,
+        "is_viewer":      False,   # VIEW role: read-only everywhere (set by bootstrap)
         "sites":          [],      # sites the user may edit (set by bootstrap)
         "booted":         False,
         "values":         {},   # {site: {pl: {row_id: {col_id: value}}}}
@@ -503,7 +506,8 @@ def bootstrap(_n, app_data: dict, form_data: dict):
     sites = _load_access().get(user, set())
     state["user"]      = user
     state["is_admin"]  = "*" in sites
-    state["sites"]     = sorted(s for s in sites if s != "*")
+    state["is_viewer"] = "VIEW" in sites
+    state["sites"]     = sorted(s for s in sites if s not in ("*", "VIEW"))
     wk = current_week()
     state["week_id"]   = wk["week_id"]
     state["week_year"] = wk["year"]
