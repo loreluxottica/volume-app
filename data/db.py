@@ -116,17 +116,22 @@ def _reset_conn() -> None:
 
 
 def _exec(query: str, params: list | None = None) -> pd.DataFrame:
-    """Execute a SELECT; reconnects once on stale-connection failure."""
+    """Execute a SELECT; reconnects once on stale-connection failure.
+    Only connection-level errors are retried — a genuine SQL error (syntax,
+    missing column) surfaces immediately instead of running twice."""
     for attempt in (1, 2):
         try:
             with _get_conn().cursor() as cur:
                 cur.execute(query, params or [])
                 cols = [d[0] for d in (cur.description or [])]
                 return pd.DataFrame(cur.fetchall(), columns=cols)
-        except Exception:
+        except (psycopg2.OperationalError, psycopg2.InterfaceError):
             _reset_conn()
             if attempt == 2:
                 raise
+        except Exception:
+            _reset_conn()
+            raise
     raise RuntimeError("unreachable")
 
 
