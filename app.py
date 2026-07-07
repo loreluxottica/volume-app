@@ -269,6 +269,7 @@ def _load_global(state: dict, pl: str) -> bool:
         return False
 
     sums: dict = {r["id"]: {} for r in ROWS}
+    counts: dict = {}   # {cid: n} for wip_ot — a percentage averages, not sums
     for _, r in ext.iterrows():
         if r["product_line"] != pl:
             continue
@@ -282,6 +283,13 @@ def _load_global(state: dict, pl: str) -> bool:
         if v is None:
             continue
         sums[rid][cid] = sums[rid].get(cid, 0.0) + v
+        if rid == "wip_ot":
+            counts[cid] = counts.get(cid, 0) + 1
+
+    # WIP OT % is a percentage: the GLOBAL cell is the mean of the plants
+    # that submitted it, not their sum.
+    for cid, n in counts.items():
+        sums["wip_ot"][cid] = sums["wip_ot"][cid] / n
 
     state["global"][pl] = {
         rid: {cid: _fmt(val) for cid, val in cells.items()}
