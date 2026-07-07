@@ -26,3 +26,10 @@ Thumbs.db
 
 volumes_bbp_v07.docx
 _docx_dump.txt
+
+*.xlsx
+
+# Local SQLite test DB + offline backend (never committed)
+*.db
+local_volumes.db
+data/local_db.py
