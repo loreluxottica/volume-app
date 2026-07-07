@@ -116,17 +116,22 @@ def _reset_conn() -> None:
 
 
 def _exec(query: str, params: list | None = None) -> pd.DataFrame:
-    """Execute a SELECT; reconnects once on stale-connection failure."""
+    """Execute a SELECT; reconnects once on stale-connection failure.
+    Only connection-level errors are retried — a genuine SQL error (syntax,
+    missing column) surfaces immediately instead of running twice."""
     for attempt in (1, 2):
         try:
             with _get_conn().cursor() as cur:
                 cur.execute(query, params or [])
                 cols = [d[0] for d in (cur.description or [])]
                 return pd.DataFrame(cur.fetchall(), columns=cols)
-        except Exception:
+        except (psycopg2.OperationalError, psycopg2.InterfaceError):
             _reset_conn()
             if attempt == 2:
                 raise
+        except Exception:
+            _reset_conn()
+            raise
     raise RuntimeError("unreachable")
 
 
@@ -234,7 +239,7 @@ def get_latest_submissions(week_id: int, year: int, site: str, product_line: str
                    is_zero_flagged, comment_preset, comment_other,
                    ROW_NUMBER() OVER (
                        PARTITION BY submission_type, channel
-                       ORDER BY timestamp DESC
+                       ORDER BY timestamp DESC, submission_id DESC
                    ) AS rn
             FROM {_T_SUBMISSIONS()}
             WHERE week_id = %s AND year = %s AND site = %s AND product_line = %s
@@ -453,7 +458,7 @@ def get_gli_extract(week_id: int, year: int) -> pd.DataFrame:
                    comment_preset, comment_other, timestamp, user_id,
                    ROW_NUMBER() OVER (
                        PARTITION BY site, product_line, submission_type, channel
-                       ORDER BY timestamp DESC
+                       ORDER BY timestamp DESC, submission_id DESC
                    ) AS rn
             FROM {_T_SUBMISSIONS()}
             WHERE week_id = %s AND year = %s AND official_log = TRUE
