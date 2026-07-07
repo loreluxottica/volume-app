@@ -33,9 +33,9 @@ _WEEK_TTL = 1800                        # re-check DB every 30 min
 _weeks: pd.DataFrame | None = None
 _weeks_ts: float = 0.0
 _access: dict[str, set[str]] | None = None
-_submissions_cache: dict[tuple, pd.DataFrame] = {}
-_drafts_cache: dict[tuple, pd.DataFrame] = {}
-_gli_cache: dict[int, pd.DataFrame] = {}
+_submissions_cache: dict[tuple, pd.DataFrame] = {}   # (year, week_id, site, pl)
+_drafts_cache: dict[tuple, pd.DataFrame] = {}        # (year, week_id, site, pl, user)
+_gli_cache: dict[tuple, pd.DataFrame] = {}           # (year, week_id)
 
 
 def cached_current_week() -> dict[str, Any]:
@@ -45,7 +45,10 @@ def cached_current_week() -> dict[str, Any]:
         with _lock:
             if _current_week is None or (monotonic() - _current_week_ts) > _WEEK_TTL:
                 fresh = get_current_week()
-                if _current_week is not None and fresh.get("week_id") != _current_week.get("week_id"):
+                if _current_week is not None and (
+                    (fresh.get("week_id"), fresh.get("year"))
+                    != (_current_week.get("week_id"), _current_week.get("year"))
+                ):
                     # New week opened — drop stale submissions/drafts/extracts
                     _submissions_cache.clear()
                     _drafts_cache.clear()
@@ -76,43 +79,44 @@ def cached_access() -> dict[str, set[str]]:
     return _access
 
 
-def cached_submissions(week_id: int, site: str, product_line: str) -> pd.DataFrame:
-    key = (week_id, site, product_line)
+def cached_submissions(week_id: int, year: int, site: str, product_line: str) -> pd.DataFrame:
+    key = (year, week_id, site, product_line)
     if key not in _submissions_cache:
         with _lock:
             if key not in _submissions_cache:
-                _submissions_cache[key] = get_latest_submissions(week_id, site, product_line)
+                _submissions_cache[key] = get_latest_submissions(week_id, year, site, product_line)
     return _submissions_cache[key]
 
 
-def cached_drafts(week_id: int, site: str, product_line: str, user_id: str) -> pd.DataFrame:
-    key = (week_id, site, product_line, user_id)
+def cached_drafts(week_id: int, year: int, site: str, product_line: str, user_id: str) -> pd.DataFrame:
+    key = (year, week_id, site, product_line, user_id)
     if key not in _drafts_cache:
         with _lock:
             if key not in _drafts_cache:
-                _drafts_cache[key] = get_drafts(week_id, site, product_line, user_id)
+                _drafts_cache[key] = get_drafts(week_id, year, site, product_line, user_id)
     return _drafts_cache[key]
 
 
-def cached_gli_extract(week_id: int) -> pd.DataFrame:
-    if week_id not in _gli_cache:
+def cached_gli_extract(week_id: int, year: int) -> pd.DataFrame:
+    key = (year, week_id)
+    if key not in _gli_cache:
         with _lock:
-            if week_id not in _gli_cache:
-                _gli_cache[week_id] = get_gli_extract(week_id)
-    return _gli_cache[week_id]
+            if key not in _gli_cache:
+                _gli_cache[key] = get_gli_extract(week_id, year)
+    return _gli_cache[key]
 
 
-def invalidate_submissions(week_id: int, site: str, product_line: str) -> None:
+def invalidate_submissions(week_id: int, year: int, site: str, product_line: str) -> None:
     """Call after submit_row — also drops GLOBAL extract since it changed."""
     with _lock:
-        _submissions_cache.pop((week_id, site, product_line), None)
-        _gli_cache.pop(week_id, None)
+        _submissions_cache.pop((year, week_id, site, product_line), None)
+        _gli_cache.pop((year, week_id), None)
 
 
-def invalidate_drafts(week_id: int, site: str, product_line: str, user_id: str) -> None:
+def invalidate_drafts(week_id: int, year: int, site: str, product_line: str, user_id: str) -> None:
     """Call after save_draft or delete_draft."""
     with _lock:
-        _drafts_cache.pop((week_id, site, product_line, user_id), None)
+        _drafts_cache.pop((year, week_id, site, product_line, user_id), None)
 
 
 def invalidate_access() -> None:
