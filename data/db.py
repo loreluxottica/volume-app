@@ -140,6 +140,27 @@ def _run(query: str, params: list | None = None) -> None:
         raise
 
 
+def _run_txn(statements: list[tuple[str, list | None]]) -> None:
+    """Execute several write statements in ONE transaction — all or nothing.
+    The connection runs with autocommit=True, so an explicit BEGIN/COMMIT pair
+    opens and closes the transaction. Not retried (same double-write rationale
+    as _run); on any failure the whole batch is rolled back."""
+    conn = _get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("BEGIN")
+            for query, params in statements:
+                cur.execute(query, params or [])
+            cur.execute("COMMIT")
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        _reset_conn()
+        raise
+
+
 # ── weeks ─────────────────────────────────────────────────────────────────────
 
 def get_current_week() -> dict[str, Any]:
@@ -263,8 +284,7 @@ def submit_row(
     placeholders = ", ".join(["(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"] * len(rows_to_insert))
     params = [p for row in rows_to_insert for p in row]
 
-    _run(
-        f"""
+    merge_sql = f"""
         MERGE INTO {_T_SUBMISSIONS()} AS t
         USING (
             SELECT * FROM (
@@ -284,16 +304,13 @@ def submit_row(
            AND t.official_log = TRUE
         WHEN MATCHED THEN
             UPDATE SET official_log = FALSE
-        """,
-        params,
-    )
+        """
 
     placeholders_insert = ", ".join(["(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, TRUE, %s, %s, FALSE, NULL, %s, %s)"] * len(rows_to_insert))
     # Separate param list: append (is_delay, delay_timestamp) to each row so the
     # two new columns don't corrupt the 13-col MERGE params reused above.
     insert_params = [p for row in rows_to_insert for p in (*row, is_delay, delay_ts)]
-    _run(
-        f"""
+    insert_sql = f"""
         INSERT INTO {_T_SUBMISSIONS()}
           (submission_id, timestamp, week_id, year, site, product_line,
            user_id, submission_type, channel, value_kpcs,
@@ -301,9 +318,11 @@ def submit_row(
            comment_preset, comment_other, is_amendment, ref_submission_id,
            is_delay, delay_timestamp)
         VALUES {placeholders_insert}
-        """,
-        insert_params,
-    )
+        """
+
+    # One transaction: never demote the old official rows without landing the
+    # new ones (a connection drop between the two would lose the channel).
+    _run_txn([(merge_sql, params), (insert_sql, insert_params)])
 
 
 # ── drafts ────────────────────────────────────────────────────────────────────

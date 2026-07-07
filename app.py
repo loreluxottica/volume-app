@@ -112,11 +112,11 @@ def current_week() -> dict:
     """
     Current open week as {week_id, year}.
 
-    Resolved through cache.cached_current_week() so every gunicorn worker
-    self-populates on first use — it must NOT depend on the bootstrap callback
-    having run in this particular worker process (gunicorn runs >1 worker, and
-    a module global is per-process). Returns {0, 0} if the DB is unreachable
-    or has no open week.
+    Resolved through cache.cached_current_week() so the worker self-populates
+    on first use — it must NOT depend on the bootstrap callback having run
+    first (and it stays correct if gunicorn workers are ever scaled above 1,
+    since a module global is per-process). Returns {0, 0} if the DB is
+    unreachable or has no open week.
     """
     try:
         wk = cache.cached_current_week()
@@ -632,6 +632,7 @@ def render_ui(app_data: dict, form_data: dict):
         is_readonly=is_ro,
         weeks=weeks,
         open_week_id=open_wk["week_id"],
+        open_year=open_wk["year"],
     )
     body = render_data_table(
         current_site=site, current_pl=pl,
@@ -1863,6 +1864,10 @@ def resolve_delay(_confirm, _cancel, app_data: dict, form_data: dict):
 # ── CSV export ────────────────────────────────────────────────────────────────
 # Downloads the current week's gli_extract, filtered to the selected product
 # line (and site, unless GLOBAL is selected). BBP §6.9.
+# Deliberately ungated: reads are open to every authenticated user (only edits
+# are permission-checked). Note: the GLOBAL export is the RAW per-site extract —
+# DONGGUAN's dummy sub-channels stay unfolded — unlike the summed GLOBAL screen.
+# Format is it-IT friendly: ';' separator, ',' decimals (opens right in Excel).
 
 @app.callback(
     Output("csv-download", "data"),
@@ -1877,6 +1882,8 @@ def export_csv(n, state: dict):
 
     week = state["week_id"]
     year = state["week_year"]
+    if not week or not year:
+        return dash.no_update, "⚠ Not connected to the database — reload the page."
     try:
         df = cache.cached_gli_extract(week, year)
     except Exception as exc:
@@ -1890,12 +1897,14 @@ def export_csv(n, state: dict):
         return dash.no_update, "No data to export for this week."
 
     fname = f"volumes_{year}_wk{week}_{site}_{pl}.csv"
-    return dcc.send_data_frame(df.to_csv, fname, index=False), f"⤓ Exported {fname}"
+    return (dcc.send_data_frame(df.to_csv, fname, index=False, sep=";", decimal=","),
+            f"⤓ Exported {fname}")
 
 
 # ── Double Tap — refresh server cache ─────────────────────────────────────────
-# Server cache (data/cache.py) is per-process; gunicorn runs 2 workers, so each
-# click only clears the worker that serves the request. Tap twice for full effect.
+# Clears the per-process server cache (data/cache.py) and reloads the view.
+# gunicorn runs a single worker (gunicorn.conf.py), so one tap clears it all;
+# entries also self-expire on a TTL, so this button is just the instant path.
 
 @app.callback(
     Output("app-state",   "data", allow_duplicate=True),
