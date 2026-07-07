@@ -234,7 +234,7 @@ def get_latest_submissions(week_id: int, year: int, site: str, product_line: str
                    is_zero_flagged, comment_preset, comment_other,
                    ROW_NUMBER() OVER (
                        PARTITION BY submission_type, channel
-                       ORDER BY timestamp DESC
+                       ORDER BY timestamp DESC, submission_id DESC
                    ) AS rn
             FROM {_T_SUBMISSIONS()}
             WHERE week_id = %s AND year = %s AND site = %s AND product_line = %s
@@ -453,7 +453,7 @@ def get_gli_extract(week_id: int, year: int) -> pd.DataFrame:
                    comment_preset, comment_other, timestamp, user_id,
                    ROW_NUMBER() OVER (
                        PARTITION BY site, product_line, submission_type, channel
-                       ORDER BY timestamp DESC
+                       ORDER BY timestamp DESC, submission_id DESC
                    ) AS rn
             FROM {_T_SUBMISSIONS()}
             WHERE week_id = %s AND year = %s AND official_log = TRUE
