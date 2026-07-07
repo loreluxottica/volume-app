@@ -175,7 +175,7 @@ CREATE TABLE `sbx-logistics`.`volume-data-entry-app`.weeks (
 -- (le righe si aggiungono soltanto; submit_row marca official_log=FALSE su
 --  quelle superate, mai DELETE)
 CREATE TABLE `sbx-logistics`.`volume-data-entry-app`.submissions (
-  submission_id STRING, timestamp TIMESTAMP, week_id INT, site STRING,
+  submission_id STRING, timestamp TIMESTAMP, week_id INT, year INT, site STRING,
   product_line STRING, user_id STRING, submission_type STRING, channel STRING,
   value_kpcs DOUBLE, is_zero_flagged BOOLEAN, official_log BOOLEAN,
   comment_preset STRING, comment_other STRING, is_amendment BOOLEAN,
@@ -186,7 +186,7 @@ CLUSTER BY (week_id, site, product_line);
 
 -- `sbx-logistics`.`volume-data-entry-app`.drafts (sovrascritta a ogni Save — NON append-only)
 CREATE TABLE `sbx-logistics`.`volume-data-entry-app`.drafts (
-  draft_id STRING, saved_at TIMESTAMP, week_id INT, site STRING,
+  draft_id STRING, saved_at TIMESTAMP, week_id INT, year INT, site STRING,
   product_line STRING, user_id STRING, submission_type STRING, channel STRING,
   value_kpcs DOUBLE, is_zero_flagged BOOLEAN, comment_preset STRING,
   comment_other STRING
@@ -209,6 +209,12 @@ CREATE TABLE `sbx-logistics`.`volume-data-entry-app`.app_access (
 > Le colonne `is_delay` / `delay_timestamp` di `submissions` sono aggiunte via
 > `ALTER TABLE submissions ADD COLUMN ...` (già applicate su Lakebase); marcano le
 > scritture su settimane passate confermate dal modal di ritardo.
+
+> La colonna `year` di `submissions` / `drafts` è aggiunta via
+> `migrations/2026-07-add-year.sql`: i numeri di settimana ISO si ripetono ogni
+> anno, quindi ogni lettura/scrittura filtra su `(year, week_id)` — eseguire lo
+> script su Lakebase PRIMA del deploy di questa versione (vedi le note nello
+> script per l'ordine di deploy).
 
 ## Gestione accessi
 
