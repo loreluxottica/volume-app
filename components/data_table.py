@@ -44,6 +44,23 @@ def _fmt_thousands(raw) -> str:
     out = f"{v / 1000.0:.1f}".replace(".", ",")
     return out[:-2] if out.endswith(",0") else out   # 265,0 -> 265
 
+
+def _fmt_1dec(raw) -> str:
+    """Read-only display only: round to 1 decimal, decimal comma — for values
+    shown unscaled (WIP OT %). '96.286' -> '96,3'. Blank/non-numeric unchanged."""
+    s = "" if raw is None else str(raw).strip()
+    if s == "":
+        return s
+    t = s.replace(" ", "")
+    if "," in t:
+        t = t.replace(".", "").replace(",", ".")
+    try:
+        v = float(t)
+    except (TypeError, ValueError):
+        return s
+    out = f"{v:.1f}".replace(".", ",")
+    return out[:-2] if out.endswith(",0") else out   # 96,0 -> 96
+
 _PRESET_LABELS: dict[str, str] = {
     p["id"]: p["label"]
     for preset_list in [COMMENT_PRESETS, COMMENT_PRESETS_WIP_OT]
@@ -1099,9 +1116,9 @@ def render_wip_ot_row(
         disp_cls = "fri-display" + (" fri-display-below" if is_below else " fri-display-empty" if not val else "")
         fc = (comments or {}).get(cid, {})
         ct = _comment_text(fc) if fc else ""
-        # WIP OT is a percentage — never scale to thousands; show raw value.
+        # WIP OT is a percentage — never scale to thousands; 1-decimal display.
         data_cells.append(html.Td(className=cell_cls, title=ct, children=[
-            html.Span(val or "—", className=disp_cls),
+            html.Span((_fmt_1dec(val) if (is_submitted or is_readonly) else val) or "—", className=disp_cls),
             _render_chip(fc),
         ]))
 

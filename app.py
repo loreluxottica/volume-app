@@ -145,14 +145,17 @@ def _to_float(s) -> float | None:
 
 
 def _fmt(v) -> str:
-    """DB numeric → display string for a number input (None/NaN → '')."""
+    """DB numeric → display string for a number input (None/NaN → '').
+    Rounded to 1 decimal — the UI never shows more (float noise like
+    65.33333333333333 from GLOBAL means would leak through otherwise)."""
     if v is None or v != v:
         return ""
     try:
         f = float(v)
     except (TypeError, ValueError):
         return str(v)
-    s = str(int(f)) if f == int(f) else str(f)
+    f = round(f, 1)
+    s = str(int(f)) if f == int(f) else f"{f:.1f}"
     return s.replace(".", ",")          # decimal comma for display (it-IT)
 
 
