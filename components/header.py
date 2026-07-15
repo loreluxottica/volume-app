@@ -46,6 +46,7 @@ def render_app_header(
     is_readonly: bool,
     weeks: list[dict] | None = None,
     open_week_id: int | None = None,
+    open_year: int | None = None,
     page: str = "entry",
 ) -> html.Div:
     now = datetime.now()
@@ -55,7 +56,8 @@ def render_app_header(
 
     iso_week    = week_id
     report_week = _report_week(week_id, year)
-    is_past     = open_week_id is not None and week_id != open_week_id
+    # ISO week numbers repeat every year — the open week matches on BOTH.
+    is_past     = open_week_id is not None and (week_id, year) != (open_week_id, open_year)
     on_landings = page == "landings"
 
     # Back-selector options: open week + every past week, newest first.
@@ -63,7 +65,7 @@ def render_app_header(
     for w in (weeks or []):
         wid, wyr = int(w["week_id"]), int(w["year"])
         label = f"WK {_report_week(wid, wyr)} | ISO {wid} · {wyr}"
-        if open_week_id is not None and wid == open_week_id:
+        if open_week_id is not None and (wid, wyr) == (open_week_id, open_year):
             label += "  (current)"
         week_options.append({"label": label, "value": f"{wyr}-{wid}"})
 

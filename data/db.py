@@ -9,6 +9,10 @@
 #   drafts        — drafts saved before submit (overwritten on each Save)
 #   app_access    — per-user site access ('*' = every site / admin)
 #
+# Weeks are keyed by (year, week_id): ISO week numbers repeat every year, so
+# every submissions/drafts read and write must filter on both columns
+# (see migrations/2026-07-add-year.sql).
+#
 # Connection is established lazily on first query and reused across requests.
 # Auth: Databricks Apps injects M2M OAuth automatically; Config().token gives
 # the current token, which is used as the PostgreSQL password.
@@ -113,17 +117,22 @@ def _reset_conn() -> None:
 
 
 def _exec(query: str, params: list | None = None) -> pd.DataFrame:
-    """Execute a SELECT; reconnects once on stale-connection failure."""
+    """Execute a SELECT; reconnects once on stale-connection failure.
+    Only connection-level errors are retried — a genuine SQL error (syntax,
+    missing column) surfaces immediately instead of running twice."""
     for attempt in (1, 2):
         try:
             with _get_conn().cursor() as cur:
                 cur.execute(query, params or [])
                 cols = [d[0] for d in (cur.description or [])]
                 return pd.DataFrame(cur.fetchall(), columns=cols)
-        except Exception:
+        except (psycopg2.OperationalError, psycopg2.InterfaceError):
             _reset_conn()
             if attempt == 2:
                 raise
+        except Exception:
+            _reset_conn()
+            raise
     raise RuntimeError("unreachable")
 
 
@@ -133,6 +142,27 @@ def _run(query: str, params: list | None = None) -> None:
         with _get_conn().cursor() as cur:
             cur.execute(query, params or [])
     except Exception:
+        _reset_conn()
+        raise
+
+
+def _run_txn(statements: list[tuple[str, list | None]]) -> None:
+    """Execute several write statements in ONE transaction — all or nothing.
+    The connection runs with autocommit=True, so an explicit BEGIN/COMMIT pair
+    opens and closes the transaction. Not retried (same double-write rationale
+    as _run); on any failure the whole batch is rolled back."""
+    conn = _get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("BEGIN")
+            for query, params in statements:
+                cur.execute(query, params or [])
+            cur.execute("COMMIT")
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
         _reset_conn()
         raise
 
@@ -183,7 +213,7 @@ def get_access() -> dict[str, set[str]]:
 
 # ── submissions ───────────────────────────────────────────────────────────────
 
-def get_submissions(week_id: int, site: str, product_line: str) -> pd.DataFrame:
+def get_submissions(week_id: int, year: int, site: str, product_line: str) -> pd.DataFrame:
     """Return all submission rows for a given week/site/product_line."""
     return _exec(
         f"""
@@ -192,15 +222,16 @@ def get_submissions(week_id: int, site: str, product_line: str) -> pd.DataFrame:
                comment_preset, comment_other, is_amendment
         FROM {_T_SUBMISSIONS()}
         WHERE week_id = %s
+          AND year = %s
           AND site = %s
           AND product_line = %s
         ORDER BY timestamp ASC
         """,
-        [week_id, site, product_line],
+        [week_id, year, site, product_line],
     )
 
 
-def get_latest_submissions(week_id: int, site: str, product_line: str) -> pd.DataFrame:
+def get_latest_submissions(week_id: int, year: int, site: str, product_line: str) -> pd.DataFrame:
     """Return the latest submission per (submission_type, channel) key."""
     return _exec(
         f"""
@@ -209,10 +240,10 @@ def get_latest_submissions(week_id: int, site: str, product_line: str) -> pd.Dat
                    is_zero_flagged, comment_preset, comment_other,
                    ROW_NUMBER() OVER (
                        PARTITION BY submission_type, channel
-                       ORDER BY timestamp DESC
+                       ORDER BY timestamp DESC, submission_id DESC
                    ) AS rn
             FROM {_T_SUBMISSIONS()}
-            WHERE week_id = %s AND site = %s AND product_line = %s
+            WHERE week_id = %s AND year = %s AND site = %s AND product_line = %s
               AND official_log = TRUE
         )
         SELECT submission_type, channel, value_kpcs,
@@ -220,12 +251,13 @@ def get_latest_submissions(week_id: int, site: str, product_line: str) -> pd.Dat
         FROM ranked
         WHERE rn = 1
         """,
-        [week_id, site, product_line],
+        [week_id, year, site, product_line],
     )
 
 
 def submit_row(
     week_id: int,
+    year: int,
     site: str,
     product_line: str,
     user_id: str,
@@ -246,7 +278,7 @@ def submit_row(
         presets = ",".join(comment_data.get("presets", []))
         others = comment_data.get("others", "") or ""
         rows_to_insert.append((
-            str(uuid.uuid4()), now, week_id, site, product_line,
+            str(uuid.uuid4()), now, week_id, year, site, product_line,
             user_id, submission_type, channel, value,
             zero_flags.get(channel, False),
             presets, others,
@@ -255,22 +287,22 @@ def submit_row(
     if not rows_to_insert:
         return
 
-    placeholders = ", ".join(["(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"] * len(rows_to_insert))
+    placeholders = ", ".join(["(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"] * len(rows_to_insert))
     params = [p for row in rows_to_insert for p in row]
 
-    _run(
-        f"""
+    merge_sql = f"""
         MERGE INTO {_T_SUBMISSIONS()} AS t
         USING (
             SELECT * FROM (
                 VALUES {placeholders}
             ) AS s(
-                submission_id, timestamp, week_id, site, product_line,
+                submission_id, timestamp, week_id, year, site, product_line,
                 user_id, submission_type, channel, value_kpcs,
                 is_zero_flagged, comment_preset, comment_other
             )
         ) AS src
         ON t.week_id = src.week_id
+           AND t.year = src.year
            AND t.site = src.site
            AND t.product_line = src.product_line
            AND t.submission_type = src.submission_type
@@ -278,31 +310,30 @@ def submit_row(
            AND t.official_log = TRUE
         WHEN MATCHED THEN
             UPDATE SET official_log = FALSE
-        """,
-        params,
-    )
+        """
 
-    placeholders_insert = ", ".join(["(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, TRUE, %s, %s, FALSE, NULL, %s, %s)"] * len(rows_to_insert))
+    placeholders_insert = ", ".join(["(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, TRUE, %s, %s, FALSE, NULL, %s, %s)"] * len(rows_to_insert))
     # Separate param list: append (is_delay, delay_timestamp) to each row so the
-    # two new columns don't corrupt the 12-col MERGE params reused above.
+    # two new columns don't corrupt the 13-col MERGE params reused above.
     insert_params = [p for row in rows_to_insert for p in (*row, is_delay, delay_ts)]
-    _run(
-        f"""
+    insert_sql = f"""
         INSERT INTO {_T_SUBMISSIONS()}
-          (submission_id, timestamp, week_id, site, product_line,
+          (submission_id, timestamp, week_id, year, site, product_line,
            user_id, submission_type, channel, value_kpcs,
            is_zero_flagged, official_log,
            comment_preset, comment_other, is_amendment, ref_submission_id,
            is_delay, delay_timestamp)
         VALUES {placeholders_insert}
-        """,
-        insert_params,
-    )
+        """
+
+    # One transaction: never demote the old official rows without landing the
+    # new ones (a connection drop between the two would lose the channel).
+    _run_txn([(merge_sql, params), (insert_sql, insert_params)])
 
 
 # ── drafts ────────────────────────────────────────────────────────────────────
 
-def get_draft(week_id: int, site: str, product_line: str,
+def get_draft(week_id: int, year: int, site: str, product_line: str,
               submission_type: str, user_id: str) -> pd.DataFrame:
     """Return draft rows for a given key (one row per channel)."""
     return _exec(
@@ -310,16 +341,17 @@ def get_draft(week_id: int, site: str, product_line: str,
         SELECT channel, value_kpcs, is_zero_flagged, comment_preset, comment_other
         FROM {_T_DRAFTS()}
         WHERE week_id = %s
+          AND year = %s
           AND site = %s
           AND product_line = %s
           AND submission_type = %s
           AND user_id = %s
         """,
-        [week_id, site, product_line, submission_type, user_id],
+        [week_id, year, site, product_line, submission_type, user_id],
     )
 
 
-def get_drafts(week_id: int, site: str, product_line: str,
+def get_drafts(week_id: int, year: int, site: str, product_line: str,
                user_id: str) -> pd.DataFrame:
     """Return every draft row for a (week, site, product_line, user) in one query."""
     return _exec(
@@ -328,16 +360,18 @@ def get_drafts(week_id: int, site: str, product_line: str,
                comment_preset, comment_other
         FROM {_T_DRAFTS()}
         WHERE week_id = %s
+          AND year = %s
           AND site = %s
           AND product_line = %s
           AND user_id = %s
         """,
-        [week_id, site, product_line, user_id],
+        [week_id, year, site, product_line, user_id],
     )
 
 
 def save_draft(
     week_id: int,
+    year: int,
     site: str,
     product_line: str,
     user_id: str,
@@ -354,7 +388,7 @@ def save_draft(
         presets = ",".join(comment_data.get("presets", []))
         others = comment_data.get("others", "") or ""
         rows_to_insert.append((
-            str(uuid.uuid4()), now, week_id, site, product_line,
+            str(uuid.uuid4()), now, week_id, year, site, product_line,
             user_id, submission_type, channel, value,
             zero_flags.get(channel, False),
             presets, others,
@@ -363,7 +397,7 @@ def save_draft(
     if not rows_to_insert:
         return
 
-    placeholders = ", ".join(["(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"] * len(rows_to_insert))
+    placeholders = ", ".join(["(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"] * len(rows_to_insert))
     params = [p for row in rows_to_insert for p in row]
 
     _run(
@@ -373,12 +407,13 @@ def save_draft(
             SELECT * FROM (
                 VALUES {placeholders}
             ) AS s(
-                draft_id, saved_at, week_id, site, product_line,
+                draft_id, saved_at, week_id, year, site, product_line,
                 user_id, submission_type, channel, value_kpcs,
                 is_zero_flagged, comment_preset, comment_other
             )
         ) AS src
         ON t.week_id = src.week_id
+           AND t.year = src.year
            AND t.site = src.site
            AND t.product_line = src.product_line
            AND t.submission_type = src.submission_type
@@ -392,23 +427,23 @@ def save_draft(
                 comment_preset = src.comment_preset,
                 comment_other = src.comment_other
         WHEN NOT MATCHED THEN
-            INSERT (draft_id, saved_at, week_id, site, product_line, user_id, submission_type, channel, value_kpcs, is_zero_flagged, comment_preset, comment_other)
-            VALUES (src.draft_id, src.saved_at, src.week_id, src.site, src.product_line, src.user_id, src.submission_type, src.channel, src.value_kpcs, src.is_zero_flagged, src.comment_preset, src.comment_other)
+            INSERT (draft_id, saved_at, week_id, year, site, product_line, user_id, submission_type, channel, value_kpcs, is_zero_flagged, comment_preset, comment_other)
+            VALUES (src.draft_id, src.saved_at, src.week_id, src.year, src.site, src.product_line, src.user_id, src.submission_type, src.channel, src.value_kpcs, src.is_zero_flagged, src.comment_preset, src.comment_other)
         """,
         params,
     )
 
 
-def delete_draft(week_id: int, site: str, product_line: str,
+def delete_draft(week_id: int, year: int, site: str, product_line: str,
                  submission_type: str, user_id: str) -> None:
     """Remove draft after a successful Submit."""
     _run(
         f"""
         DELETE FROM {_T_DRAFTS()}
-        WHERE week_id = %s AND site = %s AND product_line = %s
+        WHERE week_id = %s AND year = %s AND site = %s AND product_line = %s
           AND submission_type = %s AND user_id = %s
         """,
-        [week_id, site, product_line, submission_type, user_id],
+        [week_id, year, site, product_line, submission_type, user_id],
     )
 
 
@@ -488,27 +523,27 @@ def get_landings_weekly(year: int) -> pd.DataFrame:
 
 # ── extract (read-only, for the Excel Dashboard) ──────────────────────────────
 
-def get_gli_extract(week_id: int) -> pd.DataFrame:
+def get_gli_extract(week_id: int, year: int) -> pd.DataFrame:
     """Return the full extract for a given week — the authoritative row per key."""
     return _exec(
         f"""
         WITH ranked AS (
-            SELECT week_id, site, product_line, submission_type,
+            SELECT week_id, year, site, product_line, submission_type,
                    channel, value_kpcs, is_zero_flagged,
                    comment_preset, comment_other, timestamp, user_id,
                    ROW_NUMBER() OVER (
                        PARTITION BY site, product_line, submission_type, channel
-                       ORDER BY timestamp DESC
+                       ORDER BY timestamp DESC, submission_id DESC
                    ) AS rn
             FROM {_T_SUBMISSIONS()}
-            WHERE week_id = %s AND official_log = TRUE
+            WHERE week_id = %s AND year = %s AND official_log = TRUE
         )
-        SELECT week_id, site, product_line, submission_type,
+        SELECT week_id, year, site, product_line, submission_type,
                channel, value_kpcs, is_zero_flagged,
                comment_preset, comment_other, timestamp, user_id
         FROM ranked
         WHERE rn = 1
         ORDER BY site, product_line, submission_type, channel
         """,
-        [week_id],
+        [week_id, year],
     )

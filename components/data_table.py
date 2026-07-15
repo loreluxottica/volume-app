@@ -44,6 +44,23 @@ def _fmt_thousands(raw) -> str:
     out = f"{v / 1000.0:.1f}".replace(".", ",")
     return out[:-2] if out.endswith(",0") else out   # 265,0 -> 265
 
+
+def _fmt_1dec(raw) -> str:
+    """Read-only display only: round to 1 decimal, decimal comma — for values
+    shown unscaled (WIP OT %). '96.286' -> '96,3'. Blank/non-numeric unchanged."""
+    s = "" if raw is None else str(raw).strip()
+    if s == "":
+        return s
+    t = s.replace(" ", "")
+    if "," in t:
+        t = t.replace(".", "").replace(",", ".")
+    try:
+        v = float(t)
+    except (TypeError, ValueError):
+        return s
+    out = f"{v:.1f}".replace(".", ",")
+    return out[:-2] if out.endswith(",0") else out   # 96,0 -> 96
+
 _PRESET_LABELS: dict[str, str] = {
     p["id"]: p["label"]
     for preset_list in [COMMENT_PRESETS, COMMENT_PRESETS_WIP_OT]
@@ -1012,7 +1029,7 @@ def render_friday_row(
         if zf:
             fc = (comments or {}).get(cid, {})
             ct = _comment_text(fc) if fc else ""
-            data_cells.append(html.Td(className="data-cell", children=[
+            data_cells.append(html.Td(className="data-cell", title=ct, children=[
                 html.Div(className="zero-cell", children=[html.Span("ZERO ✓", className="zero-label")]),
                 _render_chip(fc, no_ship=True),
             ]))
@@ -1024,7 +1041,7 @@ def render_friday_row(
         disp_cls = "fri-display" + (" fri-display-below" if is_below else " fri-display-empty" if not val else "")
         fc = (comments or {}).get(cid, {})
         ct = _comment_text(fc) if fc else ""
-        data_cells.append(html.Td(className=cell_cls, children=[
+        data_cells.append(html.Td(className=cell_cls, title=ct, children=[
             html.Span((_fmt_thousands(val) if (is_submitted or is_readonly) else val) or "—", className=disp_cls),
             _render_chip(fc),
         ]))
@@ -1092,7 +1109,7 @@ def render_wip_ot_row(
         if zf:
             fc = (comments or {}).get(cid, {})
             ct = _comment_text(fc) if fc else ""
-            data_cells.append(html.Td(className="data-cell", children=[
+            data_cells.append(html.Td(className="data-cell", title=ct, children=[
                 html.Div(className="zero-cell", children=[html.Span("ZERO ✓", className="zero-label")]),
                 _render_chip(fc),
             ]))
@@ -1104,9 +1121,9 @@ def render_wip_ot_row(
         disp_cls = "fri-display" + (" fri-display-below" if is_below else " fri-display-empty" if not val else "")
         fc = (comments or {}).get(cid, {})
         ct = _comment_text(fc) if fc else ""
-        # WIP OT is a percentage — never scale to thousands; show raw value.
-        data_cells.append(html.Td(className=cell_cls, children=[
-            html.Span(val or "—", className=disp_cls),
+        # WIP OT is a percentage — never scale to thousands; 1-decimal display.
+        data_cells.append(html.Td(className=cell_cls, title=ct, children=[
+            html.Span((_fmt_1dec(val) if (is_submitted or is_readonly) else val) or "—", className=disp_cls),
             _render_chip(fc),
         ]))
 
@@ -1174,7 +1191,7 @@ def render_actual_row(
         if zf:
             fc = (comments or {}).get(cid, {})
             ct = _comment_text(fc) if fc else ""
-            data_cells.append(html.Td(className="data-cell", children=[
+            data_cells.append(html.Td(className="data-cell", title=ct, children=[
                 html.Div(className="zero-cell", children=[html.Span("ZERO ✓", className="zero-label")]),
                 _render_chip(fc, no_ship=True),
             ]))
@@ -1186,7 +1203,7 @@ def render_actual_row(
         disp_cls = "fri-display" + (" fri-display-below" if is_below else " fri-display-empty" if not val else "")
         fc = (comments or {}).get(cid, {})
         ct = _comment_text(fc) if fc else ""
-        data_cells.append(html.Td(className=cell_cls, children=[
+        data_cells.append(html.Td(className=cell_cls, title=ct, children=[
             html.Span((_fmt_thousands(val) if (is_submitted or is_readonly) else val) or "—", className=disp_cls),
             _render_chip(fc),
         ]))
@@ -1255,7 +1272,7 @@ def render_thu_row(
         if zf:
             fc = (comments or {}).get(cid, {})
             ct = _comment_text(fc) if fc else ""
-            data_cells.append(html.Td(className="data-cell", children=[
+            data_cells.append(html.Td(className="data-cell", title=ct, children=[
                 html.Div(className="zero-cell", children=[html.Span("ZERO ✓", className="zero-label")]),
                 _render_chip(fc, no_ship=True),
             ]))
@@ -1267,7 +1284,7 @@ def render_thu_row(
         disp_cls = "fri-display" + (" fri-display-below" if is_below else " fri-display-empty" if not val else "")
         fc = (comments or {}).get(cid, {})
         ct = _comment_text(fc) if fc else ""
-        data_cells.append(html.Td(className=cell_cls, children=[
+        data_cells.append(html.Td(className=cell_cls, title=ct, children=[
             html.Span((_fmt_thousands(val) if (is_submitted or is_readonly) else val) or "—", className=disp_cls),
             _render_chip(fc),
         ]))

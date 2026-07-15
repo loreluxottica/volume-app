@@ -177,14 +177,14 @@ NA_WEARABLES_BY_SITE: dict[str, dict[str, list[str]]] = {
         "wip_ot":  ["inb_gtk", "inb_tri", "whls_gross", "ds_na", "repl_el", "meta"],
     },
     "TIJUANA": {
-        "py":      ["inb_gtk", "inb_tri", "rop_labs", "whls_gross", "whls_net", "ds_na", "ecom", "dummy", "repl_el", "meta"],
-        "siop":    ["inb_gtk", "inb_tri", "rop_labs", "whls_gross", "whls_net", "ds_na", "ecom", "dummy", "repl_el", "meta"],
-        "mon_frc": ["inb_gtk", "inb_tri", "rop_labs", "whls_gross", "whls_net", "ds_na", "ecom", "dummy", "repl_el", "meta"],
-        "thu_frc": ["inb_gtk", "inb_tri", "rop_labs", "whls_gross", "whls_net", "ds_na", "ecom", "dummy", "repl_el", "meta"],
-        "fri_frc": ["inb_gtk", "inb_tri", "rop_labs", "whls_gross", "whls_net", "ds_na", "ecom", "dummy", "repl_el", "meta"],
-        "actual":  ["inb_gtk", "inb_tri", "rop_labs", "whls_gross", "whls_net", "ds_na", "ecom", "dummy", "repl_el", "meta"],
-        "eow_wip": ["inb_gtk", "inb_tri", "rop_labs", "whls_gross", "whls_net", "ds_na", "ecom", "dummy", "repl_el", "meta"],
-        "wip_ot":  ["inb_gtk", "inb_tri", "rop_labs", "whls_gross", "whls_net", "ds_na", "ecom", "dummy", "repl_el", "meta"],
+        "py":      ["inb_gtk", "inb_tri", "rop_labs", "whls_net", "ds_na", "ecom", "dummy", "repl_el", "meta"],
+        "siop":    ["inb_gtk", "inb_tri", "rop_labs", "whls_net", "ds_na", "ecom", "dummy", "repl_el", "meta"],
+        "mon_frc": ["inb_gtk", "inb_tri", "rop_labs", "whls_net", "ds_na", "ecom", "dummy", "repl_el", "meta"],
+        "thu_frc": ["inb_gtk", "inb_tri", "rop_labs", "whls_net", "ds_na", "ecom", "dummy", "repl_el", "meta"],
+        "fri_frc": ["inb_gtk", "inb_tri", "rop_labs", "whls_net", "ds_na", "ecom", "dummy", "repl_el", "meta"],
+        "actual":  ["inb_gtk", "inb_tri", "rop_labs", "whls_net", "ds_na", "ecom", "dummy", "repl_el", "meta"],
+        "eow_wip": ["inb_gtk", "inb_tri", "rop_labs", "whls_net", "ds_na", "ecom", "dummy", "repl_el", "meta"],
+        "wip_ot":  ["inb_gtk", "inb_tri", "rop_labs", "whls_net", "ds_na", "ecom", "dummy", "repl_el", "meta"],
     },
     "DONGGUAN": {
         "py":      ["inb_gtk", "inb_tri", "rop_labs", "whls_gross", "whls_net", "retail", "ds_na", "ecom", "dummy_repl_el", "dummy_local", "repl_el", "meta"],
@@ -344,6 +344,27 @@ THRESHOLD_ABS = 10000   # pcs (users now enter whole numbers, not Kpcs)
 THRESHOLD_REL = 0.10    # 10%
 
 
+def parse_num(raw) -> float | None:
+    """
+    Form value → float, decimal-comma aware (it-IT). None/blank/unparseable →
+    None. When a comma is present it is the decimal separator and dots are
+    thousands ("1.234,5" → 1234.5); otherwise plain float ("12.5" → 12.5).
+    SINGLE SOURCE for numeric parsing: app.py's DB payload (_to_float), the
+    threshold/zero validators below and data_table rendering must all agree,
+    or a comma-formatted value bypasses submit-time validation.
+    """
+    if isinstance(raw, str):
+        raw = raw.strip().replace(" ", "")
+        if "," in raw:                     # comma=decimal, dots are thousands
+            raw = raw.replace(".", "").replace(",", ".")
+    if raw in (None, ""):
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
+
+
 def cols_below_threshold(fri_values: dict, mon_values: dict,
                          na_cols: list[str], cols: list[dict]) -> list[str]:
     """
@@ -355,14 +376,9 @@ def cols_below_threshold(fri_values: dict, mon_values: dict,
         cid = col["id"]
         if cid in na_cols:
             continue
-        fri_raw = fri_values.get(cid, "")
-        mon_raw = mon_values.get(cid, "")
-        if fri_raw == "" or mon_raw == "":
-            continue
-        try:
-            fri = float(fri_raw)
-            mon = float(mon_raw)
-        except (TypeError, ValueError):
+        fri = parse_num(fri_values.get(cid, ""))
+        mon = parse_num(mon_values.get(cid, ""))
+        if fri is None or mon is None:
             continue
         diff = mon - fri
         if diff >= THRESHOLD_ABS or (mon > 0 and diff / mon >= THRESHOLD_REL):
@@ -391,16 +407,8 @@ def incomplete_cells(values: dict, zero_flags: dict, na_cols: list[str],
 
 
 def _is_zero_value(raw) -> bool:
-    """True if raw parses to numeric 0 (e.g. '0', '0.0', 0, 0.0). Blank/non-numeric = False."""
-    if raw is None:
-        return False
-    s = str(raw).strip()
-    if s == "":
-        return False
-    try:
-        return float(s) == 0.0
-    except (TypeError, ValueError):
-        return False
+    """True if raw parses to numeric 0 (e.g. '0', '0,0', 0.0). Blank/non-numeric = False."""
+    return parse_num(raw) == 0.0
 
 
 def zero_cells_missing_comment(values: dict, zero_flags: dict, comments: dict,
@@ -441,13 +449,7 @@ def wip_ot_below_threshold(values: dict, na_cols: list[str],
         cid = col["id"]
         if cid in na_cols:
             continue
-        raw = values.get(cid, "")
-        if raw == "":
-            continue
-        try:
-            v = float(raw)
-        except (TypeError, ValueError):
-            continue
-        if v <= WIP_OT_THRESHOLD:
+        v = parse_num(values.get(cid, ""))
+        if v is not None and v <= WIP_OT_THRESHOLD:
             result.append(cid)
     return result

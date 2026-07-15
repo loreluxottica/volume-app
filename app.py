@@ -20,7 +20,7 @@ from datetime import date
 import dash
 from dash import Input, Output, State, ctx, dcc, html, ALL, Patch
 
-from components.header import render_topbar, render_app_header
+from components.header import render_topbar, render_app_header, _report_week
 from components.data_table import render_data_table
 from components.landings import render_landings
 from data import cache, db
@@ -30,7 +30,7 @@ from data.schema import (
     LANDINGS_GROUPS, LANDINGS_MONTH_ROWS, LANDINGS_QUARTER_ROWS,
     LANDINGS_METRICS, LANDINGS_EMEA_METRICS,
     cols_below_threshold, wip_ot_below_threshold, incomplete_cells,
-    zero_cells_missing_comment, _is_zero_value,
+    zero_cells_missing_comment, _is_zero_value, parse_num,
 )
 
 # ── App init ──────────────────────────────────────────────────────────────────
@@ -103,6 +103,8 @@ def _display_name(email: str) -> str:
 
 def _can_edit(site: str, state: dict) -> bool:
     """Whether the current user may edit the given site."""
+    if state.get("is_viewer"):
+        return False                        # VIEW role: read-only everywhere
     if site == GLOBAL_SITE:
         return False
     if state.get("is_admin"):
@@ -114,11 +116,11 @@ def current_week() -> dict:
     """
     Current open week as {week_id, year}.
 
-    Resolved through cache.cached_current_week() so every gunicorn worker
-    self-populates on first use — it must NOT depend on the bootstrap callback
-    having run in this particular worker process (gunicorn runs >1 worker, and
-    a module global is per-process). Returns {0, 0} if the DB is unreachable
-    or has no open week.
+    Resolved through cache.cached_current_week() so the worker self-populates
+    on first use — it must NOT depend on the bootstrap callback having run
+    first (and it stays correct if gunicorn workers are ever scaled above 1,
+    since a module global is per-process). Returns {0, 0} if the DB is
+    unreachable or has no open week.
     """
     try:
         wk = cache.cached_current_week()
@@ -131,35 +133,33 @@ def current_week() -> dict:
 def _is_delay(state: dict) -> bool:
     """True when the selected week is an earlier (past) week, not the open one."""
     wk = state.get("week_id") or 0
-    return wk != 0 and wk != current_week()["week_id"]
+    if wk == 0:
+        return False
+    open_wk = current_week()
+    return (wk, state.get("week_year") or 0) != (open_wk["week_id"], open_wk["year"])
 
 
 # ── DB ↔ state helpers ────────────────────────────────────────────────────────
 
 def _to_float(s) -> float | None:
-    """Form string → DB numeric (empty → None). Comma = decimal separator."""
-    if isinstance(s, str):
-        s = s.strip().replace(" ", "")
-        if "," in s:                       # comma=decimal, dots are thousands
-            s = s.replace(".", "").replace(",", ".")
-        # only dots / digits → leave as-is so point-decimal still parses
-    if s in (None, ""):
-        return None
-    try:
-        return float(s)
-    except (TypeError, ValueError):
-        return None
+    """Form string → DB numeric (empty → None). Comma = decimal separator.
+    Delegates to schema.parse_num so payloads, validators and rendering all
+    parse identically."""
+    return parse_num(s)
 
 
 def _fmt(v) -> str:
-    """DB numeric → display string for a number input (None/NaN → '')."""
+    """DB numeric → display string for a number input (None/NaN → '').
+    Rounded to 1 decimal — the UI never shows more (float noise like
+    65.33333333333333 from GLOBAL means would leak through otherwise)."""
     if v is None or v != v:
         return ""
     try:
         f = float(v)
     except (TypeError, ValueError):
         return str(v)
-    s = str(int(f)) if f == int(f) else str(f)
+    f = round(f, 1)
+    s = str(int(f)) if f == int(f) else f"{f:.1f}"
     return s.replace(".", ",")          # decimal comma for display (it-IT)
 
 
@@ -192,11 +192,12 @@ def _load_slice(state: dict, site: str, pl: str) -> bool:
     if key in state["loaded"]:
         return True
     week    = state["week_id"]
+    year    = state["week_year"]
     user    = state.get("user") or DEV_USER
     col_ids = {c["id"] for c in cols_for(site, pl)}
 
     try:
-        latest = cache.cached_submissions(week, site, pl)
+        latest = cache.cached_submissions(week, year, site, pl)
     except Exception as exc:
         print(f"[warn] get_latest_submissions failed for {key}: {exc}")
         return False
@@ -226,7 +227,7 @@ def _load_slice(state: dict, site: str, pl: str) -> bool:
     # Drafts are loaded for sites the user can edit.
     if _can_edit(site, state):
         try:
-            drafts = cache.cached_drafts(week, site, pl, user)
+            drafts = cache.cached_drafts(week, year, site, pl, user)
         except Exception as exc:
             print(f"[warn] get_drafts failed for {key}: {exc}")
             drafts = None
@@ -269,12 +270,13 @@ def _load_global(state: dict, pl: str) -> bool:
         return True
     col_ids = {c["id"] for c in COLS_BY_PL[pl]}
     try:
-        ext = cache.cached_gli_extract(state["week_id"])
+        ext = cache.cached_gli_extract(state["week_id"], state["week_year"])
     except Exception as exc:
         print(f"[warn] get_gli_extract failed: {exc}")
         return False
 
     sums: dict = {r["id"]: {} for r in ROWS}
+    counts: dict = {}   # {cid: n} for wip_ot — a percentage averages, not sums
     for _, r in ext.iterrows():
         if r["product_line"] != pl:
             continue
@@ -288,6 +290,13 @@ def _load_global(state: dict, pl: str) -> bool:
         if v is None:
             continue
         sums[rid][cid] = sums[rid].get(cid, 0.0) + v
+        if rid == "wip_ot":
+            counts[cid] = counts.get(cid, 0) + 1
+
+    # WIP OT % is a percentage: the GLOBAL cell is the mean of the plants
+    # that submitted it, not their sum.
+    for cid, n in counts.items():
+        sums["wip_ot"][cid] = sums["wip_ot"][cid] / n
 
     state["global"][pl] = {
         rid: {cid: _fmt(val) for cid, val in cells.items()}
@@ -492,6 +501,7 @@ def _empty_state() -> dict:
         "submit_attempted": False,
         "user":           "",      # signed-in email (set by bootstrap)
         "is_admin":       False,
+        "is_viewer":      False,   # VIEW role: read-only everywhere (set by bootstrap)
         "sites":          [],      # sites the user may edit (set by bootstrap)
         "booted":         False,
         "values":         {},   # {site: {pl: {row_id: {col_id: value}}}}
@@ -637,7 +647,8 @@ def bootstrap(_n, app_data: dict, form_data: dict):
     sites = _load_access().get(user, set())
     state["user"]      = user
     state["is_admin"]  = "*" in sites
-    state["sites"]     = sorted(s for s in sites if s != "*")
+    state["is_viewer"] = "VIEW" in sites
+    state["sites"]     = sorted(s for s in sites if s not in ("*", "VIEW"))
     wk = current_week()
     state["week_id"]   = wk["week_id"]
     state["week_year"] = wk["year"]
@@ -681,7 +692,7 @@ def change_week(val, app_data: dict, form_data: dict):
         year, wk = (int(x) for x in str(val).split("-"))
     except (ValueError, TypeError):
         return dash.no_update, dash.no_update, dash.no_update
-    if wk == state.get("week_id"):
+    if wk == state.get("week_id") and year == state.get("week_year"):
         return dash.no_update, dash.no_update, dash.no_update
 
     fresh = _empty_state()
@@ -691,7 +702,7 @@ def change_week(val, app_data: dict, form_data: dict):
     state["week_year"] = year
 
     ok = _load_for_view(state, state["site"], state["pl"])
-    rw = wk - 1 if wk > 1 else 0
+    rw = _report_week(wk, year)
     toast = (f"Loaded WK {rw} | ISO WK {wk}" if ok
              else "⚠ Could not load data for the selected week.")
     return _app_part(state), _form_part(state), toast
@@ -774,6 +785,7 @@ def render_ui(app_data: dict, form_data: dict):
         is_readonly=is_ro,
         weeks=weeks,
         open_week_id=open_wk["week_id"],
+        open_year=open_wk["year"],
     )
     body = render_data_table(
         current_site=site, current_pl=pl,
@@ -1428,10 +1440,11 @@ def save_row(n_clicks_list, app_data: dict, form_data: dict):
     row_label = next(r["label"] for r in ROWS if r["id"] == row_id)
     values, zero_flags, comments = _db_payload(state, site, pl, row_id)
     week = state["week_id"]
+    year = state["week_year"]
     try:
-        db.save_draft(week, site, pl, state["user"],
+        db.save_draft(week, year, site, pl, state["user"],
                       row_id, values, zero_flags, comments)
-        cache.invalidate_drafts(week, site, pl, state["user"])
+        cache.invalidate_drafts(week, year, site, pl, state["user"])
     except Exception as exc:
         return dash.no_update, f"⚠ Save failed — {exc}"
 
@@ -1458,6 +1471,7 @@ def _do_submit(state: dict, site: str, pl: str, row_id: str, is_delay: bool,
     `payload` is a click-time snapshot used by the deferred (past-week) path so
     the comment-pruning done during validation is preserved."""
     week = state["week_id"]
+    year = state["week_year"]
     user = state["user"]
     if payload is None:
         values, zero_flags, comments = _db_payload(state, site, pl, row_id)
@@ -1465,11 +1479,11 @@ def _do_submit(state: dict, site: str, pl: str, row_id: str, is_delay: bool,
         values     = payload["values"]
         zero_flags = payload["zero_flags"]
         comments   = payload["comments"]
-    db.submit_row(week, site, pl, user, row_id,
+    db.submit_row(week, year, site, pl, user, row_id,
                   values, zero_flags, comments, is_delay=is_delay)
-    db.delete_draft(week, site, pl, row_id, user)
-    cache.invalidate_submissions(week, site, pl)
-    cache.invalidate_drafts(week, site, pl, user)
+    db.delete_draft(week, year, site, pl, row_id, user)
+    cache.invalidate_submissions(week, year, site, pl)
+    cache.invalidate_drafts(week, year, site, pl, user)
     state["submitted"][site][pl][row_id] = True
     state["drafted"][site][pl][row_id]   = False
     if row_id == "fri_frc":
@@ -1510,6 +1524,7 @@ def _gate_submit(state: dict, site: str, pl: str, row_id: str):
 def _run_bulk(state: dict, site: str, pl: str, is_save: bool, is_delay: bool) -> str:
     """Save-all / Submit-all over the standard rows; returns the toast text."""
     week = state["week_id"]
+    year = state["week_year"]
     user = state["user"]
     n, errors = 0, 0
 
@@ -1536,16 +1551,16 @@ def _run_bulk(state: dict, site: str, pl: str, is_save: bool, is_delay: bool) ->
         values, zero_flags, comments = _db_payload(state, site, pl, rid)
         try:
             if is_save:
-                db.save_draft(week, site, pl, user, rid,
+                db.save_draft(week, year, site, pl, user, rid,
                               values, zero_flags, comments)
-                cache.invalidate_drafts(week, site, pl, user)
+                cache.invalidate_drafts(week, year, site, pl, user)
                 state["drafted"][site][pl][rid] = True
             else:
-                db.submit_row(week, site, pl, user, rid,
+                db.submit_row(week, year, site, pl, user, rid,
                               values, zero_flags, comments, is_delay=is_delay)
-                db.delete_draft(week, site, pl, rid, user)
-                cache.invalidate_submissions(week, site, pl)
-                cache.invalidate_drafts(week, site, pl, user)
+                db.delete_draft(week, year, site, pl, rid, user)
+                cache.invalidate_submissions(week, year, site, pl)
+                cache.invalidate_drafts(week, year, site, pl, user)
                 state["submitted"][site][pl][rid] = True
                 state["drafted"][site][pl][rid]   = False
             n += 1
@@ -1647,10 +1662,11 @@ def save_fri(n1, n2, app_data: dict, form_data: dict):
 
     values, zero_flags, comments = _db_payload(state, site, pl, "fri_frc")
     week = state["week_id"]
+    year = state["week_year"]
     try:
-        db.save_draft(week, site, pl, state["user"],
+        db.save_draft(week, year, site, pl, state["user"],
                       "fri_frc", values, zero_flags, comments)
-        cache.invalidate_drafts(week, site, pl, state["user"])
+        cache.invalidate_drafts(week, year, site, pl, state["user"])
     except Exception as exc:
         return dash.no_update, f"⚠ Save failed — {exc}"
 
@@ -1771,10 +1787,11 @@ def save_wip_ot(n1, n2, app_data: dict, form_data: dict):
 
     values, zero_flags, comments = _db_payload(state, site, pl, "wip_ot")
     week = state["week_id"]
+    year = state["week_year"]
     try:
-        db.save_draft(week, site, pl, state["user"],
+        db.save_draft(week, year, site, pl, state["user"],
                       "wip_ot", values, zero_flags, comments)
-        cache.invalidate_drafts(week, site, pl, state["user"])
+        cache.invalidate_drafts(week, year, site, pl, state["user"])
     except Exception as exc:
         return dash.no_update, f"⚠ Save failed — {exc}"
 
@@ -1894,10 +1911,11 @@ def save_actual(n1, n2, app_data: dict, form_data: dict):
 
     values, zero_flags, comments = _db_payload(state, site, pl, "actual")
     week = state["week_id"]
+    year = state["week_year"]
     try:
-        db.save_draft(week, site, pl, state["user"],
+        db.save_draft(week, year, site, pl, state["user"],
                       "actual", values, zero_flags, comments)
-        cache.invalidate_drafts(week, site, pl, state["user"])
+        cache.invalidate_drafts(week, year, site, pl, state["user"])
     except Exception as exc:
         return dash.no_update, f"⚠ Save failed — {exc}"
 
@@ -2018,10 +2036,11 @@ def save_thu(n1, n2, app_data: dict, form_data: dict):
 
     values, zero_flags, comments = _db_payload(state, site, pl, "thu_frc")
     week = state["week_id"]
+    year = state["week_year"]
     try:
-        db.save_draft(week, site, pl, state["user"],
+        db.save_draft(week, year, site, pl, state["user"],
                       "thu_frc", values, zero_flags, comments)
-        cache.invalidate_drafts(week, site, pl, state["user"])
+        cache.invalidate_drafts(week, year, site, pl, state["user"])
     except Exception as exc:
         return dash.no_update, f"⚠ Save failed — {exc}"
 
@@ -2189,7 +2208,7 @@ def toggle_delay_modal(app_data: dict):
     if not app_data.get("pending_delay"):
         return {"display": "none"}, dash.no_update
     wk = app_data.get("week_id", 0)
-    rw = wk - 1 if wk and wk > 1 else 0
+    rw = _report_week(wk, app_data.get("week_year", 0)) if wk else 0
     body = ["This edit targets ", html.Strong(f"WK {rw} | ISO WK {wk}"),
             ", a past week. It will be recorded as a delayed edit "
             "(delay = TRUE) with a timestamp. Continue?"]
@@ -2230,6 +2249,10 @@ def resolve_delay(_confirm, _cancel, app_data: dict, form_data: dict):
 # ── CSV export ────────────────────────────────────────────────────────────────
 # Downloads the current week's gli_extract, filtered to the selected product
 # line (and site, unless GLOBAL is selected). BBP §6.9.
+# Deliberately ungated: reads are open to every authenticated user (only edits
+# are permission-checked). Note: the GLOBAL export is the RAW per-site extract —
+# DONGGUAN's dummy sub-channels stay unfolded — unlike the summed GLOBAL screen.
+# Format is it-IT friendly: ';' separator, ',' decimals (opens right in Excel).
 
 @app.callback(
     Output("csv-download", "data"),
@@ -2243,8 +2266,11 @@ def export_csv(n, state: dict):
         return dash.no_update, dash.no_update
 
     week = state["week_id"]
+    year = state["week_year"]
+    if not week or not year:
+        return dash.no_update, "⚠ Not connected to the database — reload the page."
     try:
-        df = cache.cached_gli_extract(week)
+        df = cache.cached_gli_extract(week, year)
     except Exception as exc:
         return dash.no_update, f"⚠ Export failed — {exc}"
 
@@ -2255,13 +2281,15 @@ def export_csv(n, state: dict):
     if df.empty:
         return dash.no_update, "No data to export for this week."
 
-    fname = f"volumes_wk{week}_{site}_{pl}.csv"
-    return dcc.send_data_frame(df.to_csv, fname, index=False), f"⤓ Exported {fname}"
+    fname = f"volumes_{year}_wk{week}_{site}_{pl}.csv"
+    return (dcc.send_data_frame(df.to_csv, fname, index=False, sep=";", decimal=","),
+            f"⤓ Exported {fname}")
 
 
 # ── Double Tap — refresh server cache ─────────────────────────────────────────
-# Server cache (data/cache.py) is per-process; gunicorn runs 2 workers, so each
-# click only clears the worker that serves the request. Tap twice for full effect.
+# Clears the per-process server cache (data/cache.py) and reloads the view.
+# gunicorn runs a single worker (gunicorn.conf.py), so one tap clears it all;
+# entries also self-expire on a TTL, so this button is just the instant path.
 
 @app.callback(
     Output("app-state",   "data", allow_duplicate=True),
@@ -2321,15 +2349,22 @@ app.clientside_callback(
     function(fri_values, ids, app_data, form_data) {
         if (!app_data || !form_data || !Array.isArray(fri_values))
             return window.dash_clientside.no_update;
+        // Mirror of data/schema.py parse_num: comma = decimal, dots = thousands.
+        function pnum(v) {
+            var s = String(v === null || v === undefined ? '' : v).trim().split(' ').join('');
+            if (s === '') return NaN;
+            if (s.indexOf(',') !== -1) s = s.split('.').join('').replace(',', '.');
+            return parseFloat(s);
+        }
         var site = app_data.site, pl = app_data.pl;
         var sliceVals = ((form_data.values || {})[site] || {})[pl] || {};
         var mon_frc = sliceVals['mon_frc'] || {};
         var THRESHOLD_ABS = 10000, THRESHOLD_REL = 0.10;
         return ids.map(function(id_obj, i) {
             var cid = id_obj.col;
-            var fri = parseFloat(String(fri_values[i] || '').replace(',', '.'));
+            var fri = pnum(fri_values[i]);
             if (fri === 0) return {};
-            var mon = parseFloat(String(mon_frc[cid] || '').replace(',', '.'));
+            var mon = pnum(mon_frc[cid]);
             if (isNaN(fri) || isNaN(mon) || mon <= 0) return {"display": "none"};
             var diff = mon - fri;
             var below = diff >= THRESHOLD_ABS || diff / mon >= THRESHOLD_REL;
@@ -2355,9 +2390,16 @@ app.clientside_callback(
     function(wip_values, ids) {
         if (!Array.isArray(wip_values))
             return window.dash_clientside.no_update;
+        // Mirror of data/schema.py parse_num: comma = decimal, dots = thousands.
+        function pnum(v) {
+            var s = String(v === null || v === undefined ? '' : v).trim().split(' ').join('');
+            if (s === '') return NaN;
+            if (s.indexOf(',') !== -1) s = s.split('.').join('').replace(',', '.');
+            return parseFloat(s);
+        }
         var THRESHOLD = 90;
         return ids.map(function(id_obj, i) {
-            var v = parseFloat(String(wip_values[i] || '').replace(',', '.'));
+            var v = pnum(wip_values[i]);
             if (isNaN(v)) return {"display": "none"};
             return v <= THRESHOLD ? {} : {"display": "none"};
         });
@@ -2379,15 +2421,22 @@ app.clientside_callback(
     function(actual_values, ids, app_data, form_data) {
         if (!app_data || !form_data || !Array.isArray(actual_values))
             return window.dash_clientside.no_update;
+        // Mirror of data/schema.py parse_num: comma = decimal, dots = thousands.
+        function pnum(v) {
+            var s = String(v === null || v === undefined ? '' : v).trim().split(' ').join('');
+            if (s === '') return NaN;
+            if (s.indexOf(',') !== -1) s = s.split('.').join('').replace(',', '.');
+            return parseFloat(s);
+        }
         var site = app_data.site, pl = app_data.pl;
         var sliceVals = ((form_data.values || {})[site] || {})[pl] || {};
         var mon_frc = sliceVals['mon_frc'] || {};
         var THRESHOLD_ABS = 10000, THRESHOLD_REL = 0.10;
         return ids.map(function(id_obj, i) {
             var cid = id_obj.col;
-            var act = parseFloat(String(actual_values[i] || '').replace(',', '.'));
+            var act = pnum(actual_values[i]);
             if (act === 0) return {};
-            var mon = parseFloat(String(mon_frc[cid] || '').replace(',', '.'));
+            var mon = pnum(mon_frc[cid]);
             if (isNaN(act) || isNaN(mon) || mon <= 0) return {"display": "none"};
             var diff = mon - act;
             var below = diff >= THRESHOLD_ABS || diff / mon >= THRESHOLD_REL;
@@ -2412,15 +2461,22 @@ app.clientside_callback(
     function(thu_values, ids, app_data, form_data) {
         if (!app_data || !form_data || !Array.isArray(thu_values))
             return window.dash_clientside.no_update;
+        // Mirror of data/schema.py parse_num: comma = decimal, dots = thousands.
+        function pnum(v) {
+            var s = String(v === null || v === undefined ? '' : v).trim().split(' ').join('');
+            if (s === '') return NaN;
+            if (s.indexOf(',') !== -1) s = s.split('.').join('').replace(',', '.');
+            return parseFloat(s);
+        }
         var site = app_data.site, pl = app_data.pl;
         var sliceVals = ((form_data.values || {})[site] || {})[pl] || {};
         var mon_frc = sliceVals['mon_frc'] || {};
         var THRESHOLD_ABS = 10000, THRESHOLD_REL = 0.10;
         return ids.map(function(id_obj, i) {
             var cid = id_obj.col;
-            var thu = parseFloat(String(thu_values[i] || '').replace(',', '.'));
+            var thu = pnum(thu_values[i]);
             if (thu === 0) return {};
-            var mon = parseFloat(String(mon_frc[cid] || '').replace(',', '.'));
+            var mon = pnum(mon_frc[cid]);
             if (isNaN(thu) || isNaN(mon) || mon <= 0) return {"display": "none"};
             var diff = mon - thu;
             var below = diff >= THRESHOLD_ABS || diff / mon >= THRESHOLD_REL;
