@@ -22,7 +22,10 @@ from data.schema import (
 )
 
 _GROUP_IDS = [g[0] for g in LANDINGS_GROUPS]
-_N_COLS = 2 + 3 * (1 + len(_GROUP_IDS))   # gutter + label + 5 triplets
+# Each group column = 1 gap spacer + 3 data cells (PY/CY/D%). The gap gives a
+# little breathing room between adjacent groups without breaking each triplet's
+# shared box. gutter + label + (1 + len groups) group columns.
+_N_COLS = 2 + 4 * (1 + len(_GROUP_IDS))
 
 
 # ── formatting helpers ────────────────────────────────────────────────────────
@@ -94,17 +97,35 @@ def _build_chart(chart_py: dict, chart_cy: dict, current_week: int, year: int) -
 
 # ── table building blocks ─────────────────────────────────────────────────────
 
-def _recap_header() -> html.Thead:
+def _gap_th() -> html.Th:
+    return html.Th("", className="recap-gap-th")
+
+
+def _gap_td() -> html.Td:
+    return html.Td(className="recap-gap-td")
+
+
+def _recap_header(editable_groups: set[str]) -> html.Thead:
     macro = [
         html.Th("", className="recap-empty-th"),
         html.Th("", className="recap-empty-th"),
+        _gap_th(),
         html.Th("TOTAL", colSpan=3, className="recap-macro-th recap-macro-total"),
     ]
-    for _gid, label, _members in LANDINGS_GROUPS:
-        macro.append(html.Th(label, colSpan=3, className="recap-macro-th"))
+    for gid, label, _members in LANDINGS_GROUPS:
+        macro.append(_gap_th())
+        if gid in editable_groups:
+            macro.append(html.Th(label, colSpan=3, className="recap-macro-th"))
+        else:
+            macro.append(html.Th(
+                ["🔒 ", label], colSpan=3,
+                className="recap-macro-th recap-macro-locked",
+                title="Read only — not in your scope",
+            ))
     subs = [html.Th("", className="recap-empty-th"),
             html.Th("", className="recap-empty-th")]
     for _ in range(1 + len(_GROUP_IDS)):
+        subs.append(_gap_th())
         subs.extend([
             html.Th("PY",  className="recap-sub-th"),
             html.Th("CY",  className="recap-sub-th recap-sub-cy"),
@@ -121,13 +142,15 @@ def _pct_span(py: float | None, cy: float | None, id_dict=None) -> html.Span:
     return html.Span(txt, **kw)
 
 
-def _triplet(py_child, cy_child, pct_child, act: bool = False) -> list[html.Td]:
+def _triplet(py_child, cy_child, pct_child, act: bool = False,
+             cell_title: str | None = None) -> list[html.Td]:
     """Three cells wrapped in one black-bordered box (Excel-like group box)."""
     cy_cls = "recap-td recap-cell-mid" + (" recap-cell-act" if act else "")
+    t = {"title": cell_title} if cell_title else {}
     return [
-        html.Td(py_child,  className="recap-td recap-cell-first"),
-        html.Td(cy_child,  className=cy_cls),
-        html.Td(pct_child, className="recap-td recap-cell-last"),
+        html.Td(py_child,  className="recap-td recap-cell-first", **t),
+        html.Td(cy_child,  className=cy_cls, **t),
+        html.Td(pct_child, className="recap-td recap-cell-last", **t),
     ]
 
 
@@ -146,29 +169,39 @@ def _blank_triplet() -> list[html.Td]:
     return [html.Td(className="recap-blank") for _ in range(3)]
 
 
-def _input(period_key: str, row_type: str, group: str, metric: str, raw) -> dcc.Input:
+def _input(period_key: str, row_type: str, group: str, metric: str, raw,
+           editable: bool = True) -> dcc.Input:
     # type="text" (not "number"): the native number stepper (−/+ buttons) can't
     # be reliably suppressed by CSS across browsers. inputMode keeps the numeric
     # keypad on mobile; all value consumers parse strings (_to_num / clientside +v).
+    #
+    # Out-of-scope groups render a DISABLED input (not a plain Span) on purpose:
+    # its value stays in the landings-input pattern list that feeds the live
+    # TOTAL / D% recompute, while disabled = no events = the user can't change it
+    # (server-side save also drops out-of-scope groups).
+    cls = "num-input recap-input" + ("" if editable else " recap-input-locked")
     return dcc.Input(
         id={"type": "landings-input", "period": period_key,
             "row": row_type, "group": group, "metric": metric},
         type="text", inputMode="numeric", debounce=True,
         value=raw if raw not in ("", None) else None,
-        className="num-input recap-input",
+        disabled=not editable,
+        className=cls,
     )
 
 
 def _edit_triplet(period_key: str, row_type: str, group: str, values: dict,
-                  metrics: tuple[str, str] = ("py", "cy"), act: bool = False) -> list[html.Td]:
+                  metrics: tuple[str, str] = ("py", "cy"), act: bool = False,
+                  editable: bool = True) -> list[html.Td]:
     py_raw, cy_raw = values.get(metrics[0], ""), values.get(metrics[1], "")
     mtype = "emea" if "emea" in metrics[0] else "main"
     dpct_id = {"type": "landings-dpct", "period": period_key,
                "row": row_type, "group": group, "mtype": mtype}
     return _triplet(
-        _input(period_key, row_type, group, metrics[0], py_raw),
-        _input(period_key, row_type, group, metrics[1], cy_raw),
+        _input(period_key, row_type, group, metrics[0], py_raw, editable=editable),
+        _input(period_key, row_type, group, metrics[1], cy_raw, editable=editable),
         _pct_span(_to_num(py_raw), _to_num(cy_raw), dpct_id), act=act,
+        cell_title=None if editable else "Read only — not in your scope",
     )
 
 
@@ -192,9 +225,10 @@ def _spacer_row() -> html.Tr:
 
 
 def _blank_tail() -> list[html.Td]:
-    """Blank cells for the non-SEDICO groups of an EMEA row."""
+    """Blank cells (gap + triplet) for the non-SEDICO groups of an EMEA row."""
     cells: list[html.Td] = []
     for _ in range(len(_GROUP_IDS) - 1):
+        cells.append(_gap_td())
         cells += _blank_triplet()
     return cells
 
@@ -212,8 +246,10 @@ def _wk_row(label: str, per_group: dict, gutter: html.Td | None) -> html.Tr:
 
     cells: list = [gutter] if gutter is not None else []
     cells.append(_label_td(label))
+    cells.append(_gap_td())
     cells += _ro_triplet(_tot(py_g), _tot(cy_g))
     for gid in _GROUP_IDS:
+        cells.append(_gap_td())
         cells += _ro_triplet(py_g.get(gid), cy_g.get(gid))
     return html.Tr(cells, className="recap-row")
 
@@ -221,8 +257,8 @@ def _wk_row(label: str, per_group: dict, gutter: html.Td | None) -> html.Tr:
 def _wk_emea_row(emea: dict) -> html.Tr:
     """emea = {"py": v, "cy": v} — boxed cells only under SEDICO, rest blank."""
     cells = [_emea_label_td()]
-    cells += _blank_triplet()                                       # TOTAL
-    cells += _ro_triplet(emea.get("py"), emea.get("cy"))            # SEDICO
+    cells.append(_gap_td()); cells += _blank_triplet()              # TOTAL
+    cells.append(_gap_td()); cells += _ro_triplet(emea.get("py"), emea.get("cy"))  # SEDICO
     cells += _blank_tail()
     return html.Tr(cells, className="recap-row")
 
@@ -240,7 +276,8 @@ def _wk_rows(week_id: int, wk: dict) -> list[html.Tr]:
 # ── MONTH / QUARTER blocks (editable) ─────────────────────────────────────────
 
 def _period_row(label: str, period_key: str, row_type: str, row_values: dict,
-                gutter: html.Td | None, act: bool = False) -> html.Tr:
+                gutter: html.Td | None, editable_groups: set[str],
+                act: bool = False) -> html.Tr:
     """Editable row: TOTAL computed from current group values, groups editable."""
     def _tot(metric: str) -> float | None:
         vals = [_to_num((row_values.get(g) or {}).get(metric)) for g in _GROUP_IDS]
@@ -249,6 +286,7 @@ def _period_row(label: str, period_key: str, row_type: str, row_values: dict,
 
     cells: list = [gutter] if gutter is not None else []
     cells.append(_label_td(label, act=act))
+    cells.append(_gap_td())
     cells += _ro_triplet(
         _tot("py"), _tot("cy"), act=act,
         dpct_id={"type": "landings-dpct", "period": period_key,
@@ -259,17 +297,21 @@ def _period_row(label: str, period_key: str, row_type: str, row_values: dict,
                    "row": row_type, "metric": "cy"},
     )
     for gid in _GROUP_IDS:
+        cells.append(_gap_td())
         cells += _edit_triplet(period_key, row_type, gid,
-                               row_values.get(gid) or {}, act=act)
+                               row_values.get(gid) or {}, act=act,
+                               editable=gid in editable_groups)
     return html.Tr(cells, className="recap-row")
 
 
 def _period_emea_row(period_key: str, row_type: str, sedico_values: dict,
-                     act: bool = False) -> html.Tr:
+                     editable_groups: set[str], act: bool = False) -> html.Tr:
     cells = [_emea_label_td()]
-    cells += _blank_triplet()                                       # TOTAL
+    cells.append(_gap_td()); cells += _blank_triplet()             # TOTAL
+    cells.append(_gap_td())
     cells += _edit_triplet(period_key, row_type, "SEDICO", sedico_values,
-                           metrics=("py_emea", "cy_emea"), act=act)
+                           metrics=("py_emea", "cy_emea"), act=act,
+                           editable="SEDICO" in editable_groups)
     cells += _blank_tail()
     return html.Tr(cells, className="recap-row")
 
@@ -284,7 +326,8 @@ def _period_label(period_type: str, period_key: str) -> str:
 
 
 def _period_rows(period_type: str, period_key: str,
-                 rows: list[tuple[str, str]], landings_values: dict) -> list[html.Tr]:
+                 rows: list[tuple[str, str]], landings_values: dict,
+                 editable_groups: set[str]) -> list[html.Tr]:
     period_values = landings_values.get(period_key) or {}
     suffix = _period_label(period_type, period_key)
 
@@ -294,9 +337,10 @@ def _period_rows(period_type: str, period_key: str,
         act = row_type == "actual"   # gray fill like the Excel ACTUAL row
         gutter = _vlabel_td(suffix, 2 * len(rows)) if i == 0 else None
         out.append(_period_row(f"{prefix} {suffix}", period_key, row_type,
-                               row_values, gutter, act=act))
+                               row_values, gutter, editable_groups, act=act))
         out.append(_period_emea_row(period_key, row_type,
-                                    row_values.get("SEDICO") or {}, act=act))
+                                    row_values.get("SEDICO") or {},
+                                    editable_groups, act=act))
     return out
 
 
@@ -331,9 +375,14 @@ def _toolbar(year: int, month_key: str, quarter_key: str) -> html.Div:
 # ── page ──────────────────────────────────────────────────────────────────────
 
 def render_landings(week_id: int, year: int, weekly: dict, landings_values: dict,
-                    month_key: str, quarter_key: str) -> html.Div:
+                    month_key: str, quarter_key: str,
+                    editable_groups: set[str] | None = None) -> html.Div:
     weekly = weekly or {}
     landings_values = landings_values or {}
+    # None → full access (keeps callers that don't pass scope working); an empty
+    # set means "edit nothing" (VIEW role) and must NOT be treated as full access.
+    if editable_groups is None:
+        editable_groups = {gid for gid, _l, _m in LANDINGS_GROUPS}
 
     chart_card = html.Div([
         html.Div("Shipped CY vs Shipped PY (by week)",
@@ -347,20 +396,27 @@ def render_landings(week_id: int, year: int, weekly: dict, landings_values: dict
     ], className="landings-chart-card")
 
     # One continuous table — fixed layout: narrow gutter, wide label column,
-    # the 15 data columns share the rest equally.
+    # then each group = a narrow gap column + its 3 data columns; the data
+    # columns share the remaining width equally.
+    group_cols: list = []
+    for _ in range(1 + len(_GROUP_IDS)):
+        group_cols.append(html.Col(style={"width": "14px"}))   # inter-group gap
+        group_cols += [html.Col() for _ in range(3)]
     colgroup = html.Colgroup(
         [html.Col(style={"width": "36px"}), html.Col(style={"width": "215px"})]
-        + [html.Col() for _ in range(3 * (1 + len(_GROUP_IDS)))]
+        + group_cols
     )
 
     body_rows: list[html.Tr] = []
     body_rows += _wk_rows(week_id, weekly.get("wk", {}))
     body_rows.append(_spacer_row())
-    body_rows += _period_rows("month", month_key, LANDINGS_MONTH_ROWS, landings_values)
+    body_rows += _period_rows("month", month_key, LANDINGS_MONTH_ROWS,
+                              landings_values, editable_groups)
     body_rows.append(_spacer_row())
-    body_rows += _period_rows("quarter", quarter_key, LANDINGS_QUARTER_ROWS, landings_values)
+    body_rows += _period_rows("quarter", quarter_key, LANDINGS_QUARTER_ROWS,
+                              landings_values, editable_groups)
 
-    table = html.Table([colgroup, _recap_header(), html.Tbody(body_rows)],
+    table = html.Table([colgroup, _recap_header(editable_groups), html.Tbody(body_rows)],
                        className="recap-table")
 
     return html.Div([

@@ -497,21 +497,27 @@ input[type=number] { -moz-appearance: textfield; appearance: textfield; }
   font-family: var(--font);
 }
 
-/* Header */
+/* Header — matches the main Wearables/Frames table: navy bands, uppercase,
+   letter-spaced. Macro row = dark navy (like .th-section), sub row = lighter
+   navy (like .th-col). */
 .recap-empty-th { border: none; background: #ffffff; }
+.recap-gap-th, .recap-gap-td { border: none; background: #ffffff; padding: 0; }
 .recap-macro-th {
-  background: #efefef; color: #000;
-  border: 1px solid #000;
-  font-size: 11px; font-weight: 600; letter-spacing: 0.03em;
-  text-transform: uppercase; text-align: center; padding: 5px 6px;
+  background: var(--navy); color: var(--navy-text2);
+  border: 1px solid var(--navy);
+  font-size: 10px; font-weight: 600; letter-spacing: 0.08em;
+  text-transform: uppercase; text-align: center; padding: 7px 6px;
 }
-.recap-macro-total { font-weight: 800; border-width: 2px; }
+.recap-macro-total { font-weight: 800; }
+/* Locked group header (user out of scope) — muted navy + lock glyph */
+.recap-macro-locked { background: #33465a; color: #90a3b6; border-color: #33465a; }
 .recap-sub-th {
-  background: #ffffff; color: #333;
-  font-size: 9px; font-weight: 600; text-align: center;
-  padding: 2px 4px; border: none;
+  background: var(--navy2); color: var(--navy-text);
+  font-size: 8.5px; font-weight: 600; letter-spacing: 0.06em;
+  text-transform: uppercase; text-align: center;
+  padding: 4px 4px; border: 1px solid var(--navy2);
 }
-.recap-sub-cy { background: #efefef; }
+.recap-sub-cy { background: #22384f; color: var(--navy-text2); }
 
 /* Vertical section label (WK 22 / MAY / Q2) */
 .recap-vlabel {
@@ -562,6 +568,12 @@ input[type=number] { -moz-appearance: textfield; appearance: textfield; }
 }
 .recap-input { font-size: 11.5px; padding: 2px 4px; color: #000; height: 26px; box-sizing: border-box; }
 .recap-input::placeholder { color: transparent; }
+/* Out-of-scope (locked) group — disabled input, read-only look */
+.recap-input-locked {
+  background: #ececec; color: #8a8a8a;
+  cursor: not-allowed; pointer-events: none;
+}
+.recap-input-locked:focus { outline: none; box-shadow: none; }
 .recap-d-pct {
   font-size: 10.5px; font-family: var(--mono); color: #000;
   text-align: right; padding: 2px 4px; display: block; font-weight: 600;

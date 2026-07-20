@@ -112,6 +112,19 @@ def _can_edit(site: str, state: dict) -> bool:
     return site in state.get("sites", [])   # plant owners: only granted sites
 
 
+def _editable_landings_groups(state: dict) -> set[str]:
+    """Landings recap columns the user may edit, mapped from their site scope.
+    Any-member rule: a group is editable if the user owns at least one of its
+    member plants (e.g. NA = ATLANTA + TIJUANA → owning either unlocks NA).
+    VIEW role edits nothing; admins edit every group."""
+    if state.get("is_viewer"):
+        return set()
+    if state.get("is_admin"):
+        return {gid for gid, _lbl, _members in LANDINGS_GROUPS}
+    sites = set(state.get("sites", []))
+    return {gid for gid, _lbl, members in LANDINGS_GROUPS if sites & set(members)}
+
+
 def current_week() -> dict:
     """
     Current open week as {week_id, year}.
@@ -742,6 +755,7 @@ def render_ui(app_data: dict, form_data: dict):
             landings_values=state.get("landings_values", {}),
             month_key=state["landings"].get("month_key", ""),
             quarter_key=state["landings"].get("quarter_key", ""),
+            editable_groups=_editable_landings_groups(state),
         )
         return topbar, header, body
 
@@ -1082,8 +1096,10 @@ def change_landings_quarter(quarter_key, app_data: dict, form_data: dict):
 
 
 # ── Landings save ─────────────────────────────────────────────────────────────
-# Editable by EVERY signed-in user by design (no _can_edit check): the recap
-# Month/Quarter values are shared figures, last write wins.
+# Per-column scope: a user only writes the groups their site access unlocks
+# (see _editable_landings_groups). Out-of-scope groups are dropped server-side
+# so a forged payload can't overwrite them; within scope it's shared figures,
+# last write wins. Groups not written keep their existing DB value.
 
 @app.callback(
     Output("app-state",   "data", allow_duplicate=True),
@@ -1107,13 +1123,16 @@ def save_landings(n_month, n_quarter, app_data: dict, form_data: dict):
         "month_key" if period_type == "month" else "quarter_key")
     period_vals = (state.get("landings_values") or {}).get(period_key) or {}
 
+    allowed = _editable_landings_groups(state)   # EMEA metrics live under SEDICO
     entries: list[tuple] = []
     for row_type, groups in period_vals.items():
         for gid, metrics in groups.items():
+            if gid not in allowed:
+                continue                          # out of scope — never persist
             for metric, raw in metrics.items():
                 entries.append((row_type, gid, metric, _to_float(raw)))
     if not entries:
-        return dash.no_update, "⚠ Nothing to save."
+        return dash.no_update, "⚠ Nothing to save (or nothing in your scope)."
 
     try:
         db.save_landings_entries(period_type, period_key, state["user"], entries)
