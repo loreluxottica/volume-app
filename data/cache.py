@@ -19,12 +19,14 @@ import pandas as pd
 
 from data.db import (
     get_access,
+    get_chart_weekly,
     get_current_week,
     get_drafts,
     get_gli_extract,
     get_landings_entries,
     get_landings_weekly,
     get_latest_submissions,
+    get_setting,
     list_weeks,
 )
 
@@ -46,8 +48,13 @@ _drafts_ts: dict[tuple, float] = {}
 _gli_cache: dict[tuple, pd.DataFrame] = {}           # (year, week_id)
 _gli_ts: dict[tuple, float] = {}
 _landings_entries_cache: dict[str, pd.DataFrame] = {}
+_landings_entries_ts: dict[str, float] = {}   # TTL: recap values are shared, last write wins
 _landings_weekly: dict[int, pd.DataFrame] = {}
 _landings_weekly_ts: dict[int, float] = {}   # TTL via _is_stale (chart may lag ≤5 min)
+_chart_weekly: dict[int, pd.DataFrame] = {}
+_chart_weekly_ts: dict[int, float] = {}
+_settings: dict[str, str | None] = {}          # global app_settings key → value
+_settings_ts: dict[str, float] = {}
 
 
 def _is_stale(key, cache_ts: dict) -> bool:
@@ -134,10 +141,14 @@ def cached_gli_extract(week_id: int, year: int) -> pd.DataFrame:
 
 
 def cached_landings_entries(period_key: str) -> pd.DataFrame:
-    if period_key not in _landings_entries_cache:
+    """Month/Quarter recap values. TTL'd like every other entry: these are shared
+    figures with last-write-wins semantics, so a stale snapshot is what a Save
+    would write back over a colleague's numbers."""
+    if period_key not in _landings_entries_cache or _is_stale(period_key, _landings_entries_ts):
         with _lock:
-            if period_key not in _landings_entries_cache:
+            if period_key not in _landings_entries_cache or _is_stale(period_key, _landings_entries_ts):
                 _landings_entries_cache[period_key] = get_landings_entries(period_key)
+                _landings_entries_ts[period_key] = monotonic()
     return _landings_entries_cache[period_key]
 
 
@@ -150,10 +161,46 @@ def cached_landings_weekly(year: int) -> pd.DataFrame:
     return _landings_weekly[year]
 
 
+def cached_chart_weekly(year: int) -> pd.DataFrame:
+    if year not in _chart_weekly or _is_stale(year, _chart_weekly_ts):
+        with _lock:
+            if year not in _chart_weekly or _is_stale(year, _chart_weekly_ts):
+                _chart_weekly[year] = get_chart_weekly(year)
+                _chart_weekly_ts[year] = monotonic()
+    return _chart_weekly[year]
+
+
+def invalidate_chart_weekly(year: int) -> None:
+    """Call after save_chart_weekly_manual."""
+    with _lock:
+        _chart_weekly.pop(year, None)
+        _chart_weekly_ts.pop(year, None)
+
+
+def cached_setting(key: str, default: str | None = None) -> str | None:
+    """Global app setting, TTL'd so an admin's change surfaces within 5 min
+    (and immediately in the single-worker process after invalidate_setting)."""
+    if key not in _settings or _is_stale(key, _settings_ts):
+        with _lock:
+            if key not in _settings or _is_stale(key, _settings_ts):
+                _settings[key] = get_setting(key, default)
+                _settings_ts[key] = monotonic()
+    val = _settings.get(key)
+    return default if val is None else val
+
+
+def invalidate_setting(key: str) -> None:
+    """Call after set_setting."""
+    with _lock:
+        _settings.pop(key, None)
+        _settings_ts.pop(key, None)
+
+
 def invalidate_landings_entries(period_key: str) -> None:
     """Call after save_landings_entries."""
     with _lock:
         _landings_entries_cache.pop(period_key, None)
+        _landings_entries_ts.pop(period_key, None)
 
 
 def invalidate_submissions(week_id: int, year: int, site: str, product_line: str) -> None:
@@ -192,8 +239,11 @@ def invalidate_all() -> None:
         _gli_cache.clear()
         _gli_ts.clear()
         _landings_entries_cache.clear()
+        _landings_entries_ts.clear()
         _landings_weekly.clear()
         _landings_weekly_ts.clear()
+        _chart_weekly.clear()
+        _chart_weekly_ts.clear()
         _current_week = None
         _access = None
         _weeks = None

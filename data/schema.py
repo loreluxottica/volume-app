@@ -306,13 +306,26 @@ LANDINGS_GROUPS: list[tuple[str, str, list[str]]] = [
     ("SUMARE", "SUMARE'",        ["SUMARE"]),
 ]
 
-# Editable rows per section: (row_type, label prefix)
-LANDINGS_MONTH_ROWS   = [("business_frc", "BUSINESS FRC"), ("actual", "ACTUAL")]
-LANDINGS_QUARTER_ROWS = [("business_frc", "BUSINESS FRC"), ("logistics_frc", "LOGISTICS FRC")]
+# Editable rows per section. Row 1 (Business FRC) is always shown; row 2 is
+# selectable between Actual and Logistics FRC via a single shared toolbar toggle
+# — same choice drives both the Month and Quarter blocks.
+LANDINGS_BUSINESS_ROW   = ("business_frc", "BUSINESS FRC")
+LANDINGS_SECOND_OPTIONS = [("actual", "ACTUAL"), ("logistics_frc", "LOGISTICS FRC")]
+LANDINGS_SECOND_LABELS  = dict(LANDINGS_SECOND_OPTIONS)
+# Every row_type persisted per period — the load skeleton spans all of them so
+# toggling the second row shows each one's own saved values (incl. past periods).
+LANDINGS_ALL_ROW_TYPES  = ["business_frc", "actual", "logistics_frc"]
 
 # Metrics: "py"/"cy" editable per group; "py_emea"/"cy_emea" only under SEDICO
 LANDINGS_METRICS      = ["py", "cy"]
 LANDINGS_EMEA_METRICS = ["py_emea", "cy_emea"]
+
+# NA (North America) KPI on the chart: sum of these Friday-FRC components.
+# whls_net from the local NA plants + ds_na (direct-ship-to-NA) from the plants
+# that report it (SEDICO, DONGGUAN, RAYONG — all have ds_na active for Frames in
+# the matrix above). Derived in-app from submissions; never hardcode the number.
+NA_KPI_WHLS_PLANTS = ["ATLANTA", "TIJUANA"]
+NA_KPI_DSNA_PLANTS = ["SEDICO", "DONGGUAN", "RAYONG"]
 
 MONTH_LABELS = ["JANUARY", "FEBRUARY", "MARCH", "APRIL", "MAY", "JUNE",
                 "JULY", "AUGUST", "SEPTEMBER", "OCTOBER", "NOVEMBER", "DECEMBER"]

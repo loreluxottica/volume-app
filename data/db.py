@@ -53,6 +53,8 @@ def _T_SUBMISSIONS() -> str: return f"{_pfx()}.submissions"
 def _T_DRAFTS()      -> str: return f"{_pfx()}.drafts"
 def _T_ACCESS()      -> str: return f"{_pfx()}.app_access"
 def _T_LANDINGS()    -> str: return f"{_pfx()}.landings_entries"
+def _T_CHART_WEEKLY() -> str: return f"{_pfx()}.chart_weekly"
+def _T_SETTINGS()    -> str: return f"{_pfx()}.app_settings"
 
 
 VOLUME_PATH = "/Volumes/sbx-logistics/volume-data-entry-app/app_volume"
@@ -496,8 +498,13 @@ def save_landings_entries(
 def get_landings_weekly(year: int) -> pd.DataFrame:
     """Authoritative FRAMES whls_net / whls_net_ow_emea rows for every week of a
     year (chart + WK block of the Landings page). Same ROW_NUMBER dedup as
-    get_gli_extract. Note: submissions has no year column — scoping via the
-    weeks table is the same approximation already used elsewhere."""
+    get_gli_extract.
+
+    Scoped on submissions.year, NOT only on the weeks subquery: ISO week numbers
+    repeat every year, so `week_id IN (weeks of 2026)` alone also matches the 2025
+    rows carrying the same week numbers and sums two years into one chart. The
+    weeks subquery stays as the second filter — it restricts to weeks that were
+    actually opened."""
     return _exec(
         f"""
         WITH ranked AS (
@@ -508,8 +515,9 @@ def get_landings_weekly(year: int) -> pd.DataFrame:
                    ) AS rn
             FROM {_T_SUBMISSIONS()}
             WHERE official_log = TRUE
+              AND year = %s
               AND product_line = 'FRAMES'
-              AND channel IN ('whls_net', 'whls_net_ow_emea')
+              AND channel IN ('whls_net', 'whls_net_ow_emea', 'ds_na')
               AND submission_type IN ('py', 'mon_frc', 'fri_frc', 'actual')
               AND week_id IN (SELECT week_id FROM {_T_WEEKS()} WHERE year = %s)
         )
@@ -517,7 +525,66 @@ def get_landings_weekly(year: int) -> pd.DataFrame:
         FROM ranked
         WHERE rn = 1
         """,
+        [year, year],
+    )
+
+
+# ── chart weekly series (dedicated table, one row per year+week) ──────────────
+
+def get_chart_weekly(year: int) -> pd.DataFrame:
+    """Weekly Ship series for a data year: historical + optional manual per week.
+    Plotted value = COALESCE(value_manual, value_hist) — resolved by the caller.
+    Read for year-1 (blue PY line) and for the current year (fallback for the red
+    CY line on weeks that predate go-live, where no Actual was ever submitted)."""
+    return _exec(
+        f"""
+        SELECT week, value_hist, value_manual
+        FROM {_T_CHART_WEEKLY()}
+        WHERE year = %s
+        ORDER BY week
+        """,
         [year],
+    )
+
+
+def save_chart_weekly_manual(year: int, week: int, value: float | None,
+                             user_id: str) -> None:
+    """Upsert ONLY the manual override for a week — never touches value_hist."""
+    _run(
+        f"""
+        INSERT INTO {_T_CHART_WEEKLY()} (year, week, value_manual, updated_by, updated_at)
+        VALUES (%s, %s, %s, %s, %s)
+        ON CONFLICT (year, week)
+        DO UPDATE SET value_manual = EXCLUDED.value_manual,
+                      updated_by   = EXCLUDED.updated_by,
+                      updated_at   = EXCLUDED.updated_at
+        """,
+        [year, week, value, user_id, datetime.now(timezone.utc)],
+    )
+
+
+# ── app settings (generic global key/value) ───────────────────────────────────
+
+def get_setting(key: str, default: str | None = None) -> str | None:
+    """Return a global setting value, or `default` when the key is absent."""
+    df = _exec(f"SELECT value FROM {_T_SETTINGS()} WHERE key = %s", [key])
+    if df.empty or df.iloc[0]["value"] is None:
+        return default
+    return str(df.iloc[0]["value"])
+
+
+def set_setting(key: str, value: str, user_id: str) -> None:
+    """Upsert a global setting — last write wins on the key."""
+    _run(
+        f"""
+        INSERT INTO {_T_SETTINGS()} (key, value, updated_by, updated_at)
+        VALUES (%s, %s, %s, %s)
+        ON CONFLICT (key)
+        DO UPDATE SET value = EXCLUDED.value,
+                      updated_by = EXCLUDED.updated_by,
+                      updated_at = EXCLUDED.updated_at
+        """,
+        [key, value, user_id, datetime.now(timezone.utc)],
     )
 
 
@@ -547,3 +614,23 @@ def get_gli_extract(week_id: int, year: int) -> pd.DataFrame:
         """,
         [week_id, year],
     )
+
+
+# ── local SQLite swap (dev only) ──────────────────────────────────────────────
+# When VOLUMES_LOCAL_DB is set, every public read/write above is rebound to the
+# offline SQLite backend in data/local_db.py (seeded local_volumes.db). Import is
+# lazy and gated on the env var, so production/Lakebase never touches the module
+# (which is gitignored). Keep this list in sync with local_db.py's public API.
+if os.environ.get("VOLUMES_LOCAL_DB"):
+    from data import local_db as _local
+    for _name in (
+        "get_current_week", "list_weeks", "create_week", "get_access",
+        "get_submissions", "get_latest_submissions", "submit_row",
+        "get_draft", "get_drafts", "save_draft", "delete_draft",
+        "get_landings_entries", "save_landings_entries",
+        "get_landings_weekly", "get_chart_weekly", "save_chart_weekly_manual",
+        "get_setting", "set_setting",
+        "get_gli_extract",
+    ):
+        globals()[_name] = getattr(_local, _name)
+    print("[db] VOLUMES_LOCAL_DB set — using local SQLite backend")

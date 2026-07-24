@@ -4,7 +4,8 @@
 # replicating the "Landings siop" Excel report as closely as possible: white
 # background, black-bordered boxes, vertical section labels, detached rows.
 # WK block is read-only from the submissions DB; MONTH and QUARTER blocks are
-# editable by every user and persisted in the shared landings_entries table.
+# editable, scoped per column group, and persisted in the shared landings_entries
+# table. The whole page is admin-only (see app.py) — non-admins never get the tab.
 # Controls (period dropdowns + Save) live in a toolbar above the table so the
 # table itself stays clean for screenshots.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -16,12 +17,24 @@ from dash import dcc, html
 
 from data.schema import (
     LANDINGS_GROUPS,
-    LANDINGS_MONTH_ROWS,
-    LANDINGS_QUARTER_ROWS,
+    LANDINGS_BUSINESS_ROW,
+    LANDINGS_SECOND_OPTIONS,
+    LANDINGS_SECOND_LABELS,
     MONTH_LABELS,
+    NA_KPI_DSNA_PLANTS,
+    NA_KPI_WHLS_PLANTS,
 )
 
 _GROUP_IDS = [g[0] for g in LANDINGS_GROUPS]
+
+# Built from the constants the KPI actually sums, so the tooltip cannot drift out
+# of step with the calculation the way a hand-written list did.
+_NA_KPI_TITLE = (
+    "North America — Friday Forecast: "
+    + " + ".join(f"{p.title()} WHLS Net" for p in NA_KPI_WHLS_PLANTS)
+    + " + "
+    + " + ".join(f"{p.title()} DS NA" for p in NA_KPI_DSNA_PLANTS)
+)
 # Each group column = 1 gap spacer + 3 data cells (PY/CY/D%). The gap gives a
 # little breathing room between adjacent groups without breaking each triplet's
 # shared box. gutter + label + (1 + len groups) group columns.
@@ -61,13 +74,14 @@ def _fmt_pct(py: float | None, cy: float | None) -> tuple[str, str]:
 
 # ── chart ─────────────────────────────────────────────────────────────────────
 
-def _build_chart(chart_py: dict, chart_cy: dict, current_week: int, year: int) -> go.Figure:
+def _build_chart(chart_py: dict, chart_cy: dict, chart_fc: dict,
+                 current_week: int, year: int) -> go.Figure:
     def _series(d: dict) -> tuple[list[int], list[float]]:
         weeks = sorted(int(k) for k in d)
         return weeks, [d[str(w)] if str(w) in d else d.get(w) for w in weeks]
 
     py_x, py_y = _series(chart_py or {})
-    cy_x, cy_y = _series(chart_cy or {})
+    cy_x, cy_y = _series(chart_cy or {})   # solid Actual: weeks 1..current-1
 
     fig = go.Figure()
     fig.add_trace(go.Scatter(
@@ -78,7 +92,33 @@ def _build_chart(chart_py: dict, chart_cy: dict, current_week: int, year: int) -
         x=cy_x, y=cy_y, mode="lines", name=str(year),
         line=dict(color="#c0392b", width=2),
     ))
-    fig.add_vline(x=current_week, line_dash="dash", line_color="#444444", line_width=1)
+
+    # Dashed red Logistics-Forecast segment: continues the solid Actual line from
+    # its last point to the current-week Friday FRC, ending at the vertical line.
+    # Only drawn when the Actual line actually reaches the week before the forecast
+    # — otherwise the segment would span every missing week as one straight
+    # diagonal and read as a multi-week forecast. A lone marker leaves the gap
+    # visible, which is the truth: those weeks have no data.
+    fc = chart_fc or {}
+    fc_val = fc.get("value")
+    fc_week = fc.get("week", current_week)
+    if fc_val is not None:
+        if cy_x and cy_x[-1] == fc_week - 1:
+            fig.add_trace(go.Scatter(
+                x=[cy_x[-1], fc_week], y=[cy_y[-1], fc_val], mode="lines",
+                name=f"{year} FRC", line=dict(color="#c0392b", width=2, dash="dash"),
+                showlegend=False,
+            ))
+        else:
+            fig.add_trace(go.Scatter(
+                x=[fc_week], y=[fc_val], mode="markers",
+                name=f"{year} FRC",
+                marker=dict(color="#c0392b", size=7, symbol="circle-open"),
+                showlegend=False,
+            ))
+
+    # Black dashed vertical marker: the Actual→Forecast break / forecast end.
+    fig.add_vline(x=current_week, line_dash="dash", line_color="#000000", line_width=1)
     fig.update_layout(
         height=280,
         margin=dict(l=50, r=16, t=12, b=28),
@@ -355,7 +395,14 @@ def _quarter_options(year: int) -> list[dict]:
     return [{"label": f"Q{q} {year}", "value": f"{year}-Q{q}"} for q in range(1, 5)]
 
 
-def _toolbar(year: int, month_key: str, quarter_key: str) -> html.Div:
+def _toolbar(year: int, month_key: str, quarter_key: str, row2: str,
+             is_admin: bool = False) -> html.Div:
+    # 2nd-row toggle is a shared, admin-controlled global view. Non-admins see it
+    # disabled (RadioItems has no top-level disabled → disable each option).
+    # NB: currently unreachable — the whole page is admin-only, so is_admin is
+    # always True here. Kept for the moment access is widened again.
+    row2_label = "2nd row:" if is_admin else "🔒 2nd row:"
+    row2_title = None if is_admin else "Only an admin can change this view"
     return html.Div([
         html.Span("Month:", className="landings-ctl-label"),
         dcc.Dropdown(id="landings-month-select", options=_month_options(year),
@@ -369,13 +416,24 @@ def _toolbar(year: int, month_key: str, quarter_key: str) -> html.Div:
                      className="landings-period-dd"),
         html.Button("Save quarter", id="btn-landings-quarter-save", n_clicks=0,
                     className="action-btn btn-save landings-save-btn"),
+        # Shared 2nd-row toggle — drives both Month and Quarter blocks.
+        html.Span(row2_label, className="landings-ctl-label landings-ctl-gap"),
+        html.Div(dcc.RadioItems(
+            id="landings-row2-select",
+            options=[{"label": lbl.title(), "value": rt, "disabled": not is_admin}
+                     for rt, lbl in LANDINGS_SECOND_OPTIONS],
+            value=row2, className="landings-row2-radio",
+            inputClassName="landings-row2-input", labelClassName="landings-row2-label",
+        ), className="landings-row2-wrap" + ("" if is_admin else " is-locked"),
+           title=row2_title),
     ], className="landings-toolbar")
 
 
 # ── page ──────────────────────────────────────────────────────────────────────
 
 def render_landings(week_id: int, year: int, weekly: dict, landings_values: dict,
-                    month_key: str, quarter_key: str,
+                    month_key: str, quarter_key: str, row2: str = "actual",
+                    is_admin: bool = False,
                     editable_groups: set[str] | None = None) -> html.Div:
     weekly = weekly or {}
     landings_values = landings_values or {}
@@ -384,13 +442,22 @@ def render_landings(week_id: int, year: int, weekly: dict, landings_values: dict
     if editable_groups is None:
         editable_groups = {gid for gid, _l, _m in LANDINGS_GROUPS}
 
+    na_kpi = weekly.get("na_kpi")
+    na_text = _fmt_val(na_kpi) if na_kpi is not None else "—"
     chart_card = html.Div([
-        html.Div("Shipped CY vs Shipped PY (by week)",
-                 className="landings-chart-title"),
+        html.Div([
+            html.Div("Shipped CY vs Shipped PY (by week)",
+                     className="landings-chart-title"),
+            html.Div([
+                html.Span("NA · Friday FRC", className="landings-na-kpi-label"),
+                html.Span(na_text, className="landings-na-kpi-val"),
+            ], className="landings-na-kpi", title=_NA_KPI_TITLE),
+        ], className="landings-chart-head"),
         dcc.Graph(
             id="landings-chart",
             figure=_build_chart(weekly.get("chart_py", {}),
-                                weekly.get("chart_cy", {}), week_id, year),
+                                weekly.get("chart_cy", {}),
+                                weekly.get("chart_fc", {}), week_id, year),
             config={"staticPlot": True},
         ),
     ], className="landings-chart-card")
@@ -407,20 +474,24 @@ def render_landings(week_id: int, year: int, weekly: dict, landings_values: dict
         + group_cols
     )
 
+    # Business FRC (always) + the shared-selected second row (Actual|Logistics).
+    period_rows = [LANDINGS_BUSINESS_ROW,
+                   (row2, LANDINGS_SECOND_LABELS.get(row2, row2.upper()))]
+
     body_rows: list[html.Tr] = []
     body_rows += _wk_rows(week_id, weekly.get("wk", {}))
     body_rows.append(_spacer_row())
-    body_rows += _period_rows("month", month_key, LANDINGS_MONTH_ROWS,
+    body_rows += _period_rows("month", month_key, period_rows,
                               landings_values, editable_groups)
     body_rows.append(_spacer_row())
-    body_rows += _period_rows("quarter", quarter_key, LANDINGS_QUARTER_ROWS,
+    body_rows += _period_rows("quarter", quarter_key, period_rows,
                               landings_values, editable_groups)
 
     table = html.Table([colgroup, _recap_header(editable_groups), html.Tbody(body_rows)],
                        className="recap-table")
 
     return html.Div([
-        _toolbar(year, month_key, quarter_key),
+        _toolbar(year, month_key, quarter_key, row2, is_admin),
         chart_card,
         html.Div(table, className="table-wrap"),
     ], className="landings-wrap")

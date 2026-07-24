@@ -68,8 +68,6 @@ body {
 .topbar-brand { display: flex; align-items: center; gap: 10px; }
 .brand-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--amber-light); flex-shrink: 0; }
 .brand-name { font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--navy-text2); }
-.brand-sep { width: 1px; height: 16px; background: rgba(255,255,255,0.12); }
-.brand-sub { font-size: 11px; color: var(--navy-text); }
 .user-chip {
   display: flex; align-items: center; gap: 7px;
   background: rgba(255,255,255,0.07);
@@ -472,12 +470,21 @@ input[type=number] { -moz-appearance: textfield; appearance: textfield; }
 
 /* Chart card — dark title bar + thin black frame, like the report header */
 .landings-chart-card { border: 1px solid #000; background: #ffffff; }
-.landings-chart-title {
-  background: #111111; color: #ffffff;
-  font-size: 12px; font-weight: 700; font-style: italic;
-  text-align: center; padding: 5px 10px;
-  border-bottom: 1px solid #000;
+.landings-chart-head {
+  position: relative; background: #111111; border-bottom: 1px solid #000;
+  display: flex; align-items: center; justify-content: center; padding: 5px 10px;
 }
+.landings-chart-title {
+  color: #ffffff; font-size: 12px; font-weight: 700; font-style: italic;
+  text-align: center; background: transparent; padding: 0; border: 0;
+}
+/* NA KPI — pinned right on the title bar, derived Friday-FRC number */
+.landings-na-kpi {
+  position: absolute; right: 10px; display: flex; align-items: center; gap: 6px;
+  color: #ffffff;
+}
+.landings-na-kpi-label { font-size: 10px; font-weight: 600; opacity: 0.75; }
+.landings-na-kpi-val { font-size: 12px; font-weight: 700; }
 
 /* Toolbar — controls live here so the table stays clean for screenshots */
 .landings-toolbar {
@@ -488,6 +495,18 @@ input[type=number] { -moz-appearance: textfield; appearance: textfield; }
 .landings-ctl-gap { margin-left: 18px; }
 .landings-period-dd { min-width: 150px; font-family: var(--font); font-size: 12px; }
 .landings-save-btn { width: auto; padding: 5px 14px; }
+/* Shared 2nd-row toggle (Actual | Logistics FRC) — admin-controlled global view */
+.landings-row2-wrap { display: inline-flex; }
+.landings-row2-radio { display: inline-flex; gap: 12px; }
+.landings-row2-label {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 11px; font-weight: 600; color: var(--text-2); cursor: pointer;
+}
+.landings-row2-input { margin: 0 3px 0 0; cursor: pointer; }
+/* Non-admin: greyed + not interactive */
+.landings-row2-wrap.is-locked { opacity: 0.55; }
+.landings-row2-wrap.is-locked .landings-row2-label,
+.landings-row2-wrap.is-locked .landings-row2-input { cursor: not-allowed; }
 
 /* Recap table — single table, detached rows via vertical border-spacing */
 .recap-table {

@@ -1,4 +1,4 @@
-# Volumes Data Entry Tool — Databricks App
+# GLI Darwin Intake — Databricks App
 
 App Dash per l'inserimento dei volumi settimanali, deployata come Databricks App.
 
@@ -16,10 +16,12 @@ volume-app/
 │   ├── header.py       # Topbar + app-header
 │   └── data_table.py   # Tabella, summary bar, pannelli Friday/WIP OT%/Actual, legenda
 ├── data/
-│   ├── schema.py       # Colonne, matrice N/A, scadenze
-│   └── db.py           # Lettura/scrittura Delta Lake (databricks-sql-connector)
+│   ├── schema.py       # Colonne, matrice N/A, scadenze, gruppi Landings
+│   ├── cache.py        # Cache server-side in-memory con TTL
+│   └── db.py           # Lettura/scrittura Lakebase PostgreSQL (psycopg2)
+├── migrations/         # DDL versionato — da eseguire su Lakebase prima del deploy
 ├── scripts/
-│   └── deploy-dev.ps1  # Push su GitHub del branch dev
+│   └── run_migration.py  # Esegue un .sql (o una query) su Lakebase
 └── README.md
 ```
 
@@ -61,17 +63,119 @@ line (Frames / Wearables). Ogni riga si salva come bozza (Save) o si conferma
 - **Vista GLOBAL** in sola lettura — somma di tutti i plant.
 - **Permessi** — lettura su tutti i siti, scrittura solo sul proprio
   (tabella `app_access`).
-- **Pagina Landings** (tab "Landings") — replica del report Excel "Landings
-  siop": grafico Shipped CY vs PY per settimana (somma `whls_net` Frames di
-  tutti i plant; CY = riga Actual, PY = riga PY) + tabella recap con macro
-  colonne TOTAL / SEDICO / NA (ATL+TIJ) / LHKS (=DONGGUAN) / SUMARE', ognuna
-  con PY | CY | D%. La sezione **WK** è read-only dal DB (Business = Monday
-  FRC, Logistics = Friday FRC); le sezioni **Month** e **Quarter** sono
-  editabili da **tutti** gli utenti (dropdown periodo + Save) e persistite
-  nella tabella condivisa `landings_entries` (ultimo salvataggio vince).
-  TOTAL e D% sono calcolati. Le sotto-righe "of which EMEA" (solo SEDICO)
-  leggono il nuovo canale Frames `whls_net_ow_emea` ("WHLS Net ow EMEA"),
-  compilabile solo da SEDICO e N/A per gli altri plant.
+- **Pagina Landings** (tab "Landings") — **riservata agli admin**: chi non ha
+  `'*'` in `app_access` non vede nemmeno il tab. Replica del report Excel
+  "Landings siop": grafico Shipped CY vs PY per settimana + tabella recap con
+  macro colonne TOTAL / SEDICO / NA (ATL+TIJ) / LHKS (=DONGGUAN) / SUMARE',
+  ognuna con PY | CY | D%. La sezione **WK** è read-only dal DB (Business =
+  Monday FRC, Logistics = Friday FRC); le sezioni **Month** e **Quarter** sono
+  editabili (dropdown periodo + Save) e persistite nella tabella condivisa
+  `landings_entries` (ultimo salvataggio vince). TOTAL e D% sono calcolati.
+  Le sotto-righe "of which EMEA" (solo SEDICO) leggono il canale Frames
+  `whls_net_ow_emea` ("WHLS Net ow EMEA"), compilabile solo da SEDICO e N/A per
+  gli altri plant. Dettagli su grafico e permessi: vedi
+  [Pagina Landings](#pagina-landings-1).
+
+## Pagina Landings
+
+### Permessi — solo admin
+
+La pagina è accessibile **solo agli admin** (riga `'*'` in `app_access`). Il
+gate è su quattro livelli, perché nascondere un bottone non è controllo accessi:
+
+1. `components/header.py` non renderizza il tab `tab-landings` per i non-admin.
+2. `switch_pl` rifiuta il cambio pagina (toast "Landings is admin-only") — è
+   questo che ferma un click forgiato.
+3. `render_ui` riporta `page` a `"entry"` se lo store è manomesso.
+4. `bootstrap` azzera `page` al login: un utente a cui vengono revocati i
+   diritti admin non resta con una sessione sulla pagina.
+   `save_landings` applica lo stesso guard sul percorso di scrittura.
+
+> Il toggle "2nd row" ha ancora il lock per i non-admin (🔒, radio disabilitato).
+> Oggi è **irraggiungibile** — solo gli admin vedono la pagina — ed è tenuto
+> apposta: torna corretto nel momento in cui l'accesso viene allargato. Non è un
+> bug.
+
+### Grafico — da dove arrivano le linee
+
+| Linea | Fonte |
+|---|---|
+| Blu (PY) | `chart_weekly` dell'anno precedente, `COALESCE(value_manual, value_hist)` |
+| Rossa piena (Actual) | somma `whls_net` Frames riga `actual` da `submissions`, fino a week−1; per le settimane senza submission, fallback su `chart_weekly` dell'anno corrente |
+| Rossa tratteggiata (Logistics FRC) | Friday FRC della settimana aperta |
+
+Dove una settimana ha submission di Actual, **vincono le submission**;
+`chart_weekly` copre solo le settimane scoperte (tipicamente quelle precedenti
+alla messa online dell'app). Il segmento tratteggiato viene disegnato solo se
+l'ultima Actual è la settimana immediatamente precedente al forecast: altrimenti
+resta un marker isolato, così un buco di dati si vede invece di essere nascosto
+da una diagonale lunga più settimane.
+
+> **Attenzione al gradino.** Le due serie non misurano la stessa cosa: il totale
+> Ship del file sorgente comprende più della somma dei `whls_net` Actual per
+> plant (~20% in più sulle settimane 25 e 27 del 2026, dove entrambe le fonti
+> sono complete). La linea rossa quindi **scende di circa il 20% nel punto in cui
+> la fonte cambia**. È atteso, non un difetto.
+
+### Override manuale del grafico
+
+Non esiste UI: `value_manual` si imposta via SQL (lo statement è anche nei
+commenti di `migrations/2026-07-chart-weekly.sql`).
+
+```sql
+UPDATE volume_data_entry.chart_weekly
+   SET value_manual = 1234567, updated_by = 'nome.cognome@luxottica.com',
+       updated_at = now()
+ WHERE year = 2025 AND week = 18;
+```
+
+Rimettere `value_manual = NULL` per tornare al valore storico. `value_hist` non
+va **mai** sovrascritto.
+
+### Job settimanale
+
+`chart_weekly` deve continuare a crescere, altrimenti la linea PY del 2027 avrà
+un buco. Serve un job schedulato (accanto a quello che apre la settimana) che
+faccia l'upsert della sola settimana appena chiusa: la query è pronta in fondo a
+`migrations/2026-07-chart-weekly.sql`. Il guard `HAVING SUM(value_kpcs) IS NOT
+NULL` evita che una settimana senza submission azzeri una riga di backfill.
+
+## Migrations
+
+Il DDL vive in `migrations/`, uno script per modifica, e va eseguito su Lakebase
+**prima** del deploy della versione che lo usa.
+
+```powershell
+$env:DATABRICKS_CONFIG_PROFILE = "luxottica"   # profilo ~/.databrickscfg
+$env:LAKEBASE_ROLE = "nome.cognome@luxottica.com"
+.\.venv\Scripts\python.exe .\scripts\run_migration.py .\migrations\<file>.sql
+
+# query ad-hoc (utile per verificare)
+.\.venv\Scripts\python.exe .\scripts\run_migration.py --sql "SELECT count(*) FROM volume_data_entry.chart_weekly"
+```
+
+Lakebase è PostgreSQL, ma la password è un token OAuth che ruota (~1h): non
+esiste una connection string statica da tenere in un client, e `psql` non è
+installato. `run_migration.py` costruisce l'URL al momento della chiamata, con
+due differenze volute rispetto a `data/db.py`:
+
+- il ruolo arriva da `LAKEBASE_ROLE`, non dall'URL. `_build_conn_url` risolve
+  l'utente come `cfg.client_id or parsed.username`: con l'auth CLI `client_id` è
+  `None`, quindi userebbe lo username dell'URL — il **service principal
+  dell'app** — autenticandolo con un token personale.
+- `autocommit` è **off**: una transazione per file, così un errore a metà non
+  lascia mezzo script applicato (il DDL in Postgres è transazionale).
+
+Se più profili in `~/.databrickscfg` puntano allo stesso host, `Config()` è
+ambiguo: passare sempre `--profile` / `DATABRICKS_CONFIG_PROFILE`.
+
+**Grants**: sullo schema `volume_data_entry` esiste una regola
+`ALTER DEFAULT PRIVILEGES` che concede automaticamente `SELECT/INSERT/UPDATE/DELETE`
+al service principal dell'app su ogni tabella creata dall'owner dello schema. Le
+migration contengono comunque un `GRANT` esplicito, così l'accesso dell'app non
+dipende in silenzio da chi ha eseguito lo script. **Se la app di produzione è
+una App nuova ha un service principal diverso**: vanno aggiornati sia il target
+del `GRANT` sia `DATABRICKS_LAKEBASE_URL` in `app.yaml`.
 
 ## Deploy
 
@@ -81,14 +185,12 @@ del workspace clonato da questa repo:
 - Git folder: `/Workspace/Users/lorenzo.muscillo@luxottica.com/volume-app`
 - Branch tracciato: `dev`
 
-Il deploy si lancia con un solo comando, che fa l'intero ciclo
-(push GitHub → pull del Git folder → deploy app):
+> **Prima di ogni deploy**: eseguire su Lakebase le migration nuove (vedi
+> [Migrations](#migrations)). Il deploy parte da git, quindi una migration non
+> committata non arriva da nessuna parte — e una tabella mancante fa fallire
+> l'app a runtime, non al deploy.
 
-```powershell
-.\scripts\deploy-dev.ps1
-```
-
-In alternativa, manualmente:
+Il ciclo di deploy (push GitHub → pull del Git folder → deploy app):
 
 ```powershell
 git push origin dev
@@ -121,10 +223,7 @@ git checkout -b feature/<nome>      # nuova modifica
 #  ... lavori, git commit ...
 git push -u origin feature/<nome>   # poi Pull Request verso dev su GitHub
 
-# dopo il merge della PR in dev:
-git checkout dev
-git pull
-.\scripts\deploy-dev.ps1            # push + pull Git folder + deploy
+# dopo il merge della PR in dev: push, pull del Git folder, deploy
 ```
 
 ## Sviluppo locale
@@ -134,7 +233,21 @@ pip install -r requirements.txt
 python app.py        # http://localhost:8050
 ```
 
-`app.py` legge e scrive su Delta Lake tramite `data/db.py`: la settimana
+Per lavorare **offline**, senza toccare Lakebase, impostare `VOLUMES_LOCAL_DB`:
+in fondo a `data/db.py` c'è uno swap che ridireziona ogni lettura/scrittura sul
+backend SQLite di `data/local_db.py` (file `local_volumes.db`, entrambi
+gitignorati). Import lazy e condizionato alla variabile, quindi in produzione il
+modulo non viene nemmeno importato.
+
+```powershell
+$env:VOLUMES_LOCAL_DB = "1"
+python app.py
+```
+
+Il DB locale si auto-inizializza con una settimana aperta e la serie reale
+`chart_weekly`; le submission partono vuote.
+
+`app.py` legge e scrive tramite `data/db.py`: la settimana
 corrente e i dati di ogni coppia (sito, product line) vengono caricati dal DB
 (on-demand, alla prima apertura), e Save / Submit scrivono nelle tabelle
 `drafts` / `submissions`. La connessione è lazy: se il DB non è raggiungibile
@@ -146,40 +259,64 @@ L'app è servita da **gunicorn** (`app:server`, vedi `app.yaml`). La porta è
 letta da `DATABRICKS_APP_PORT` con bind `0.0.0.0` in `gunicorn.conf.py`.
 
 `DATABRICKS_HOST` e le credenziali OAuth del service principal sono iniettate
-da Databricks Apps; l'auth è risolta da `databricks.sdk.Config` in `db.py`.
-`DATABRICKS_HTTP_PATH` è collegato in `app.yaml` alla risorsa SQL Warehouse
-dell'app (`valueFrom: sql-warehouse`).
+da Databricks Apps; l'auth è risolta da `databricks.sdk.Config` in `db.py`, che
+usa il token come password PostgreSQL verso l'endpoint indicato da
+`DATABRICKS_LAKEBASE_URL` (`app.yaml`).
+
+**Un solo worker** (`workers = 1` in `gunicorn.conf.py`), di proposito: le
+callback Dash restituiscono snapshot interi dei `dcc.Store`, quindi worker
+concorrenti si sovrascriverebbero a vicenda; inoltre la cache di processo
+(`data/cache.py`) e la propagazione di `app_settings` valgono per processo.
 
 ## Test DB connectivity
 
-Per verificare la connessione e la scrittura sul DB puoi usare lo script:
-
 ```powershell
-python .\scripts\test_db.py
+$env:DATABRICKS_CONFIG_PROFILE = "luxottica"
+$env:LAKEBASE_ROLE = "nome.cognome@luxottica.com"
+.\.venv\Scripts\python.exe .\scripts\run_migration.py --sql "SELECT current_user, current_database()"
 ```
 
-Prima di eseguirlo, imposta le variabili di ambiente:
-
-```powershell
-$env:DATABRICKS_HOST = "https://<your-databricks-host>"
-$env:DATABRICKS_HTTP_PATH = "<your-sql-warehouse-http-path>"
-$env:DATABRICKS_TOKEN = "<your-databricks-token>"
-$env:TEST_WEEK_ID = "<open-week-id>"
-$env:TEST_SITE = "<site>"
-$env:TEST_PRODUCT_LINE = "<product-line>"
-```
-
-Lo script salva un draft di test nella tabella `drafts` e lo cancella subito dopo.
-Se la scrittura fallisce, vedrai l'errore restituito dalla connessione SQL.
+Se la connessione fallisce vedrai l'errore di psycopg2 o del provider di
+credenziali. Un `refresh token is invalid` significa che quel profilo va
+ri-autenticato con `databricks auth login --profile <nome>`.
 
 ## Schema DB
 
 > **Nota**: dal 2026-05 il DB è **Lakebase (PostgreSQL)** — database
 > `databricks_postgres`, schema `volume_data_entry` (vedi `data/db.py`).
-> Il DDL sotto è la forma storica Delta Lake delle 4 tabelle originali;
-> le colonne sono le stesse (tipi Postgres: TEXT/DOUBLE PRECISION/TIMESTAMPTZ).
+> Il DDL Delta Lake più in basso è la forma storica delle 4 tabelle originali,
+> tenuto come riferimento delle colonne; su Lakebase i tipi sono
+> TEXT / DOUBLE PRECISION / TIMESTAMPTZ.
 
-Tabelle: `weeks`, `submissions`, `drafts`, `app_access`, `landings_entries`.
+Tabelle: `weeks`, `submissions`, `drafts`, `app_access`, `landings_entries`,
+`chart_weekly`, `app_settings`. Il DDL versionato è in `migrations/`.
+
+```sql
+-- volume_data_entry.chart_weekly — serie settimanale del grafico Landings,
+-- una riga per (year, week). Vale per OGNI anno: year-1 alimenta la linea blu
+-- (PY), l'anno corrente fa da fallback per la linea rossa sulle settimane
+-- precedenti alla messa online. Valore = COALESCE(value_manual, value_hist);
+-- value_hist non si sovrascrive mai.
+CREATE TABLE IF NOT EXISTS volume_data_entry.chart_weekly (
+  year         INTEGER NOT NULL,
+  week         INTEGER NOT NULL,
+  value_hist   DOUBLE PRECISION,
+  value_manual DOUBLE PRECISION,
+  updated_by   TEXT,
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (year, week)
+);
+
+-- volume_data_entry.app_settings — impostazioni globali key/value condivise da
+-- tutti gli utenti. Oggi una sola chiave: 'landings_row2' = 'actual' |
+-- 'logistics_frc', la seconda riga dei blocchi Month/Quarter.
+CREATE TABLE IF NOT EXISTS volume_data_entry.app_settings (
+  key        TEXT PRIMARY KEY,
+  value      TEXT,
+  updated_by TEXT,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+```
 
 ```sql
 -- volume_data_entry.landings_entries — valori Month/Quarter della pagina
@@ -234,9 +371,13 @@ CREATE TABLE `sbx-logistics`.`volume-data-entry-app`.app_access (
 > `submissions` non viene mai cancellata: `submit_row` inserisce le nuove righe
 > e poi marca `official_log = FALSE` su quelle precedenti. `get_latest_submissions`
 > e `get_gli_extract` leggono la riga autorevole con `WHERE official_log = TRUE`
-> (niente view). Le tabelle sono clusterizzate per `week_id` — vedi
-> `scripts/optimize_tables.sql` per il clustering e l'`OPTIMIZE`/`VACUUM`
-> schedulato (BBP v0.7 item #11).
+> (niente view).
+
+> Indice `submissions_year_week_official_idx` su `(year, week_id) WHERE
+> official_log` (`migrations/2026-07-submissions-index.sql`): serve
+> all'aggregato annuale della pagina Landings, che altrimenti fa una scansione
+> completa della tabella su una connessione condivisa da tutti gli utenti
+> (gunicorn gira con un solo worker).
 
 > Le colonne `is_delay` / `delay_timestamp` di `submissions` sono aggiunte via
 > `ALTER TABLE submissions ADD COLUMN ...` (già applicate su Lakebase); marcano le
@@ -251,25 +392,40 @@ CREATE TABLE `sbx-logistics`.`volume-data-entry-app`.app_access (
 ## Gestione accessi
 
 Gli accessi vivono nella tabella `app_access`: una riga per (utente, sito),
-gestibile con SQL, **senza redeploy** e senza email nel repo. `site = '*'`
-significa admin (tutti i siti); un nome di plant abilita solo quel plant.
+gestibile con SQL, **senza redeploy** e senza email nel repo.
+
+| `site` | Significato |
+|---|---|
+| `'*'` | **admin** — scrive su tutti i plant ed è l'unico che vede la pagina Landings |
+| nome plant | owner: scrive solo su quel plant (una riga per plant) |
+| `'VIEW'` | sola lettura ovunque; non è admin, quindi niente Landings |
 
 ```sql
--- admin: accesso a tutti i siti
-INSERT INTO `sbx-logistics`.`volume-data-entry-app`.app_access (email, site, added_at, added_by)
-VALUES ('nome.cognome@luxottica.com', '*', current_timestamp(), 'lorenzo');
+-- admin: accesso a tutti i siti + pagina Landings
+INSERT INTO volume_data_entry.app_access (email, site, added_at, added_by)
+VALUES ('nome.cognome@luxottica.com', '*', now(), 'lorenzo');
 
 -- owner di un plant: una riga per ogni plant abilitato
-INSERT INTO `sbx-logistics`.`volume-data-entry-app`.app_access (email, site, added_at, added_by)
-VALUES ('owner.atlanta@luxottica.com', 'ATLANTA', current_timestamp(), 'lorenzo');
+INSERT INTO volume_data_entry.app_access (email, site, added_at, added_by)
+VALUES ('owner.atlanta@luxottica.com', 'ATLANTA', now(), 'lorenzo');
 ```
 
 Revoca: `DELETE FROM ... WHERE email = '...'` (eventualmente `AND site = '...'`).
+La lista è in cache con TTL 5 minuti: una modifica via SQL si propaga entro quel
+lasso, oppure subito con il bottone "Double Tap".
+
+Se `app_access` è vuota o illeggibile l'app ripiega su un singolo admin di
+fallback (`DEV_USER` in `app.py`), così non resta mai senza nessuno che possa
+entrare.
 
 ## Item aperti prima della produzione
 
 - Confermare etichette/colonne Wearables di Dongguan (`repl_el`, `meta`, `dummy`)
 - Scadenzario per sito allineato al BBP v0.6 (`data/schema.py` — `DEADLINES`); conferma finale con MatteB
-- Mappare gli utenti non-admin → proprio plant (oggi i non-admin sono limitati
-  a `OWN_SITE`; gli admin si gestiscono nella tabella `admins`)
-- Creare l'app di produzione
+- Creare l'app di produzione. Prima del go-live servono anche:
+  - il **job che apre la settimana** (nulla nell'app chiama `db.create_week`:
+    senza settimana aperta `get_current_week()` solleva e l'app parte vuota);
+  - il **job settimanale** che appende su `chart_weekly` (vedi Pagina Landings);
+  - le righe `app_access` degli utenti reali, con almeno un `'*'`;
+  - `workers = 1` in `gunicorn.conf.py` va lasciato com'è: la propagazione delle
+    impostazioni globali (`app_settings`) passa dalla cache di processo.

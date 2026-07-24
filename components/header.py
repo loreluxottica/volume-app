@@ -17,9 +17,7 @@ def render_topbar(username: str = "Lorenzo Muscillo") -> html.Div:
     return html.Div(className="topbar", children=[
         html.Div(className="topbar-brand", children=[
             html.Span(className="brand-dot"),
-            html.Span("GLI Reporting App", className="brand-name"),
-            html.Span(className="brand-sep"),
-            html.Span("Volumes Data Entry Tool", className="brand-sub"),
+            html.Span("GLI Darwin Intake", className="brand-name"),
         ]),
         html.Div(
             html.Div(className="user-chip", children=[
@@ -48,6 +46,7 @@ def render_app_header(
     open_week_id: int | None = None,
     open_year: int | None = None,
     page: str = "entry",
+    is_admin: bool = False,
 ) -> html.Div:
     now = datetime.now()
     days   = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]   # now.weekday(): Mon=0
@@ -116,7 +115,10 @@ def render_app_header(
                 ]),
             ]),
 
-            # Product line tabs
+            # Product line tabs. Landings is admin-only: the button is not rendered
+            # at all for anyone else (the app sets suppress_callback_exceptions, so
+            # switch_pl's Input on it is fine with the component absent). Hiding the
+            # tab is cosmetic — the real gate is server-side in switch_pl/render_ui.
             html.Div(className="field-group", children=[
                 html.Div("Product line", className="field-label"),
                 html.Div(className="pl-tabs", children=[
@@ -132,13 +134,14 @@ def render_app_header(
                         className=f"pl-tab{'  active' if current_pl == 'WEARABLES' and not on_landings else ''}",
                         n_clicks=0,
                     ),
+                ] + ([
                     html.Button(
                         "Landings",
                         id="tab-landings",
                         className=f"pl-tab{'  active' if on_landings else ''}",
                         n_clicks=0,
                     ),
-                ]),
+                ] if is_admin else [])),
             ]),
         ]),
 

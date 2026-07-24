@@ -1,6 +1,6 @@
 # app.py
 # ─────────────────────────────────────────────────────────────────────────────
-# Entry point for the Volumes Data Entry Tool Databricks App.
+# Entry point for the GLI Darwin Intake Databricks App.
 #
 # Run locally:
 #   pip install -r requirements.txt
@@ -27,8 +27,9 @@ from data import cache, db
 from data.schema import (
     ROWS, COLS_BY_PL, cols_for, na_matrix, SITES,
     DUMMY_SUBCOLS, DUMMY_PARENT,
-    LANDINGS_GROUPS, LANDINGS_MONTH_ROWS, LANDINGS_QUARTER_ROWS,
+    LANDINGS_GROUPS, LANDINGS_ALL_ROW_TYPES, LANDINGS_SECOND_OPTIONS,
     LANDINGS_METRICS, LANDINGS_EMEA_METRICS,
+    NA_KPI_WHLS_PLANTS, NA_KPI_DSNA_PLANTS,
     cols_below_threshold, wip_ot_below_threshold, incomplete_cells,
     zero_cells_missing_comment, _is_zero_value, parse_num,
 )
@@ -48,7 +49,7 @@ EXTERNAL_STYLESHEETS = [
 
 app = dash.Dash(
     __name__,
-    title="Volumes Data Entry Tool",
+    title="GLI Darwin Intake",
     external_stylesheets=EXTERNAL_STYLESHEETS,
     suppress_callback_exceptions=True
 )
@@ -123,6 +124,27 @@ def _editable_landings_groups(state: dict) -> set[str]:
         return {gid for gid, _lbl, _members in LANDINGS_GROUPS}
     sites = set(state.get("sites", []))
     return {gid for gid, _lbl, members in LANDINGS_GROUPS if sites & set(members)}
+
+
+LANDINGS_ROW2_DEFAULT = "actual"
+
+
+def _landings_row2() -> str:
+    """The Landings 2nd row (Actual | Logistics FRC) — a GLOBAL setting, shared by
+    everyone and changeable only by an admin.
+
+    SINGLE SOURCE for the whole feature: render, save and the toggle callback must
+    all read it from here. It deliberately does NOT live in the dcc.Store —
+    render_ui can render from a value but cannot write one back, so a per-session
+    copy goes stale for every user who didn't flip the toggle themselves, and a
+    Save would then persist the typed values under the wrong row_type.
+    """
+    try:
+        return cache.cached_setting("landings_row2", LANDINGS_ROW2_DEFAULT) \
+            or LANDINGS_ROW2_DEFAULT
+    except Exception as exc:
+        print(f"[warn] could not read the landings_row2 setting: {exc}")
+        return LANDINGS_ROW2_DEFAULT
 
 
 def current_week() -> dict:
@@ -368,16 +390,26 @@ def _load_landings_weekly(state: dict) -> bool:
         "logistics_emea": {},
     }
     cur = wk["week_id"]
+    fc_total, fc_has = 0.0, False   # current-week Logistics Forecast (Friday FRC)
+    na_val, na_has = 0.0, False     # current-week NA KPI (Friday FRC components)
     for _, r in df.iterrows():
         v = _to_float(r["value_kpcs"])
-        if v is None:
+        if v is None or v != v:   # None or NaN (zero-flagged rows store NULL)
             continue
         w, st, ch, site = int(r["week_id"]), r["submission_type"], r["channel"], r["site"]
         if ch == "whls_net":
-            if st == "actual":
+            # Solid red Actual line: only completed weeks (1..cur-1).
+            if st == "actual" and w < cur:
                 chart_cy[str(w)] = chart_cy.get(str(w), 0.0) + v
-            elif st == "py":
-                chart_py[str(w)] = chart_py.get(str(w), 0.0) + v
+            # Dashed red Forecast: current-week Friday FRC, summed across plants.
+            elif st == "fri_frc" and w == cur:
+                fc_total += v; fc_has = True
+        # NA KPI — current-week Friday-FRC components (derived, never hardcoded).
+        if w == cur and st == "fri_frc":
+            if ch == "whls_net" and site in NA_KPI_WHLS_PLANTS:
+                na_val += v; na_has = True
+            elif ch == "ds_na" and site in NA_KPI_DSNA_PLANTS:
+                na_val += v; na_has = True
         if w != cur:
             continue
         if ch == "whls_net":
@@ -400,9 +432,60 @@ def _load_landings_weekly(state: dict) -> bool:
             elif st == "fri_frc":
                 wk_block["logistics_emea"]["cy"] = v
 
-    land["weekly"] = {"chart_py": chart_py, "chart_cy": chart_cy, "wk": wk_block}
+    # Blue PY line: dedicated weekly-series table + optional per-week manual
+    # override (manual wins). Kept separate from the CY (red) series and the WK
+    # block so the historical row is never overwritten. PY of a CY year = prior
+    # year's data.
+    py_year = (wk["year"] or 0) - 1
+
+    def _num(x):  # numeric-or-missing: treats None AND NaN as missing
+        return None if x is None or x != x else float(x)
+
+    def _weekly_value(r):
+        man, hist = _num(r["value_manual"]), _num(r["value_hist"])
+        return man if man is not None else hist   # manual override wins
+
+    try:
+        pdf = cache.cached_chart_weekly(py_year)
+        for _, r in pdf.iterrows():
+            val = _weekly_value(r)
+            if val is not None:
+                chart_py[str(int(r["week"]))] = val
+    except Exception as exc:
+        print(f"[warn] get_chart_weekly({py_year}) failed: {exc}")
+
+    # Red CY line, weeks predating go-live: those have no Actual submissions, so
+    # fall back to the same weekly-series table for the CURRENT year. Submissions
+    # always win — only weeks absent from chart_cy are filled, so the line
+    # self-heals as plants submit. `w >= cur` is excluded so the solid Actual line
+    # still ends at current-1 and the dashed forecast segment keeps its meaning.
+    try:
+        cdf = cache.cached_chart_weekly(wk["year"])
+        for _, r in cdf.iterrows():
+            w = int(r["week"])
+            if w >= cur or str(w) in chart_cy:
+                continue
+            val = _weekly_value(r)
+            if val is not None:
+                chart_cy[str(w)] = val
+    except Exception as exc:
+        print(f"[warn] chart_weekly CY fallback failed: {exc}")
+
+    chart_fc = {"week": cur, "value": fc_total} if fc_has else {}
+    na_kpi = na_val if na_has else None
+
+    land["weekly"] = {"chart_py": chart_py, "chart_cy": chart_cy,
+                      "chart_fc": chart_fc, "na_kpi": na_kpi, "wk": wk_block}
     land["weekly_loaded"] = True
     return True
+
+
+def _forget_landings_period(state: dict, period_key: str) -> None:
+    """Drop a period from the session's loaded list so the next _load_landings_period
+    goes back to the DB. These are shared, last-write-wins figures: showing a stale
+    snapshot means the next Save writes it back over a colleague's numbers."""
+    state["landings"]["loaded_periods"] = [
+        k for k in state["landings"]["loaded_periods"] if k != period_key]
 
 
 def _load_landings_period(state: dict, period_type: str, period_key: str) -> bool:
@@ -414,9 +497,10 @@ def _load_landings_period(state: dict, period_type: str, period_key: str) -> boo
     """
     if period_key in state["landings"]["loaded_periods"]:
         return True
-    rows = LANDINGS_MONTH_ROWS if period_type == "month" else LANDINGS_QUARTER_ROWS
+    # Skeleton spans every row_type (business + actual + logistics) so the shared
+    # second-row toggle can show each one's saved values without a DB refetch.
     skel: dict = {}
-    for row_type, _lbl in rows:
+    for row_type in LANDINGS_ALL_ROW_TYPES:
         skel[row_type] = {}
         for gid, _l, _m in LANDINGS_GROUPS:
             metrics = LANDINGS_METRICS + (LANDINGS_EMEA_METRICS if gid == "SEDICO" else [])
@@ -534,6 +618,8 @@ def _empty_state() -> dict:
         "landings": {           # Landings recap page (read-only weekly data)
             "month_key":      "",   # "2026-06" — defaulted on first visit
             "quarter_key":    "",   # "2026-Q2"
+            # NB: the 2nd-row toggle is intentionally NOT here — it is a global
+            # setting read through _landings_row2(), not per-session state.
             "loaded_periods": [],   # period_keys fetched from the DB
             "weekly_loaded":  False,
             "weekly":         {},   # {"chart_py": {wk: v}, "chart_cy": {...}, "wk": {...}}
@@ -665,9 +751,14 @@ def bootstrap(_n, app_data: dict, form_data: dict):
     wk = current_week()
     state["week_id"]   = wk["week_id"]
     state["week_year"] = wk["year"]
-    # Non-admins start on their own plant.
-    if not state["is_admin"] and state["sites"]:
-        state["site"] = state["sites"][0]
+    # Non-admins start on their own plant, and never on the admin-only Landings
+    # page — this is the one place the reset actually reaches the store (render_ui
+    # can only refuse to render it), so a user whose admin rights were revoked
+    # doesn't keep a stale page="landings" in their session.
+    if not state["is_admin"]:
+        state["page"] = "entry"
+        if state["sites"]:
+            state["site"] = state["sites"][0]
 
     ok = _load_for_view(state, state["site"], state["pl"])
     state["booted"] = True
@@ -742,19 +833,32 @@ def render_ui(app_data: dict, form_data: dict):
         )
         return topbar, html.Div(), loading
 
+    # Landings is admin-only. Last line of defence: a tampered app-state store (or a
+    # future entry point that forgets to check) can still carry page="landings", so
+    # the renderer itself refuses and falls through to the grid.
+    if state.get("page") == "landings" and not state.get("is_admin"):
+        state["page"] = "entry"
+
     if state.get("page") == "landings":
         wk = current_week()
         header = render_app_header(
             current_site=state["site"], current_pl=state["pl"],
             week_id=wk["week_id"], year=wk["year"],
             is_readonly=False, page="landings",
+            is_admin=True,   # guarded above — only admins reach this branch
         )
+        # The 2nd-row view is a shared, admin-controlled global setting — always
+        # render from it so every user sees the same view. Guarded: this is the
+        # app's only render callback, so an uncaught DB error here blanks the whole
+        # page rather than just degrading the Landings tab.
+        row2 = _landings_row2()
         body = render_landings(
             week_id=wk["week_id"], year=wk["year"],
             weekly=state.get("landings", {}).get("weekly", {}),
             landings_values=state.get("landings_values", {}),
             month_key=state["landings"].get("month_key", ""),
             quarter_key=state["landings"].get("quarter_key", ""),
+            row2=row2, is_admin=state.get("is_admin", False),
             editable_groups=_editable_landings_groups(state),
         )
         return topbar, header, body
@@ -800,6 +904,7 @@ def render_ui(app_data: dict, form_data: dict):
         weeks=weeks,
         open_week_id=open_wk["week_id"],
         open_year=open_wk["year"],
+        is_admin=state.get("is_admin", False),
     )
     body = render_data_table(
         current_site=site, current_pl=pl,
@@ -865,6 +970,10 @@ def switch_pl(n_frames, n_wear, n_landings, app_data: dict, form_data: dict):
         return dash.no_update, dash.no_update, dash.no_update
 
     if triggered == "tab-landings":
+        # Admin-only page. The tab isn't rendered for anyone else, so this only
+        # fires on a forged click — which is exactly what it is here to stop.
+        if not state.get("is_admin"):
+            return dash.no_update, dash.no_update, "⚠ Landings is admin-only."
         if state.get("page") == "landings":
             return dash.no_update, dash.no_update, dash.no_update
         state["page"] = "landings"
@@ -1071,6 +1180,8 @@ def change_landings_month(month_key, app_data: dict, form_data: dict):
     if not month_key or month_key == state.get("landings", {}).get("month_key"):
         return dash.no_update, dash.no_update, dash.no_update
     state["landings"]["month_key"] = month_key
+    # Picking a period is an explicit "show me this" — always re-read it.
+    _forget_landings_period(state, month_key)
     ok = _load_landings_period(state, "month", month_key)
     return (_app_part(state), _form_part(state),
             "" if ok else f"⚠ Could not load {month_key}.")
@@ -1090,9 +1201,41 @@ def change_landings_quarter(quarter_key, app_data: dict, form_data: dict):
     if not quarter_key or quarter_key == state.get("landings", {}).get("quarter_key"):
         return dash.no_update, dash.no_update, dash.no_update
     state["landings"]["quarter_key"] = quarter_key
+    _forget_landings_period(state, quarter_key)
     ok = _load_landings_period(state, "quarter", quarter_key)
     return (_app_part(state), _form_part(state),
             "" if ok else f"⚠ Could not load {quarter_key}.")
+
+
+# ── Landings second-row toggle ────────────────────────────────────────────────
+# One shared selector picks the second row (Actual | Logistics FRC) for BOTH the
+# Month and Quarter blocks. All row_types are already in landings_values, so this
+# only flips the rendered row — no DB refetch. _merge keeps unsaved typed edits.
+
+@app.callback(
+    Output("app-state",   "data", allow_duplicate=True),
+    Output("form-values", "data", allow_duplicate=True),
+    Input("landings-row2-select", "value"),
+    State("app-state", "data"),
+    State("form-values", "data"),
+    prevent_initial_call=True,
+)
+def change_landings_row2(row2, app_data: dict, form_data: dict):
+    state = _merge(app_data, form_data)
+    # Admin-only: the toggle is a shared global view. Non-admins can't change it
+    # (radio is also disabled client-side; this is the server-side enforcement).
+    if not state.get("is_admin"):
+        return dash.no_update, dash.no_update
+    if not row2 or row2 == _landings_row2():
+        return dash.no_update, dash.no_update
+    try:
+        db.set_setting("landings_row2", row2, state.get("user", ""))
+        cache.invalidate_setting("landings_row2")
+    except Exception as exc:
+        print(f"[warn] set landings_row2 failed: {exc}")
+        return dash.no_update, dash.no_update
+    # No state write: the re-render reads the setting back through _landings_row2().
+    return _app_part(state), _form_part(state)
 
 
 # ── Landings save ─────────────────────────────────────────────────────────────
@@ -1112,6 +1255,10 @@ def change_landings_quarter(quarter_key, app_data: dict, form_data: dict):
 )
 def save_landings(n_month, n_quarter, app_data: dict, form_data: dict):
     state = _merge(app_data, form_data)
+    # The page is admin-only, so the write path is too — a non-admin reaching here
+    # did so with a hand-crafted payload.
+    if not state.get("is_admin"):
+        return dash.no_update, "⚠ Landings is admin-only."
     triggered = ctx.triggered_id
     if triggered == "btn-landings-month-save" and not n_month:
         return dash.no_update, dash.no_update
@@ -1124,8 +1271,14 @@ def save_landings(n_month, n_quarter, app_data: dict, form_data: dict):
     period_vals = (state.get("landings_values") or {}).get(period_key) or {}
 
     allowed = _editable_landings_groups(state)   # EMEA metrics live under SEDICO
+    # Persist only Business FRC + the currently-selected second row, so toggling
+    # never blanks the other row_type's stored values. Read from the global setting,
+    # never from the Store — see _landings_row2().
+    keep_rows = {"business_frc", _landings_row2()}
     entries: list[tuple] = []
     for row_type, groups in period_vals.items():
+        if row_type not in keep_rows:
+            continue
         for gid, metrics in groups.items():
             if gid not in allowed:
                 continue                          # out of scope — never persist
@@ -1140,6 +1293,11 @@ def save_landings(n_month, n_quarter, app_data: dict, form_data: dict):
     except Exception as exc:
         return dash.no_update, f"⚠ Save failed — {exc}"
 
+    # Mark the period for re-read: the next visit / period switch pulls it back from
+    # the DB, so a concurrent write by another user surfaces instead of this
+    # session's snapshot being re-saved over it. Not reloaded here — this callback
+    # does not output form-values, which is where landings_values lives.
+    _forget_landings_period(state, period_key)
     # Re-render so the computed TOTAL / D% cells pick up the saved values.
     return _app_part(state), f"⤓ Landings {period_key} saved"
 
@@ -1503,6 +1661,10 @@ def _do_submit(state: dict, site: str, pl: str, row_id: str, is_delay: bool,
     db.delete_draft(week, year, site, pl, row_id, user)
     cache.invalidate_submissions(week, year, site, pl)
     cache.invalidate_drafts(week, year, site, pl, user)
+    # The server cache is cleared above, but the Landings chart / WK block are
+    # gated by a per-session flag — clear it too or this user keeps seeing the
+    # pre-submit figures until a reload or a Double Tap.
+    state["landings"]["weekly_loaded"] = False
     state["submitted"][site][pl][row_id] = True
     state["drafted"][site][pl][row_id]   = False
     if row_id == "fri_frc":
@@ -1580,6 +1742,7 @@ def _run_bulk(state: dict, site: str, pl: str, is_save: bool, is_delay: bool) ->
                 db.delete_draft(week, year, site, pl, rid, user)
                 cache.invalidate_submissions(week, year, site, pl)
                 cache.invalidate_drafts(week, year, site, pl, user)
+                state["landings"]["weekly_loaded"] = False   # see _do_submit
                 state["submitted"][site][pl][rid] = True
                 state["drafted"][site][pl][rid]   = False
             n += 1
@@ -2328,9 +2491,10 @@ def refresh_cache(n, app_data: dict, form_data: dict):
     state["global_loaded"] = []
     state["landings"]["weekly_loaded"]  = False
     state["landings"]["loaded_periods"] = []
-    if state.get("page") == "landings":
+    if state.get("page") == "landings" and state.get("is_admin"):
         ok = _load_landings(state)
     else:
+        state["page"] = "entry"          # admin-only page — never reload it otherwise
         ok = _load_for_view(state, state["site"], state["pl"])
     msg = "🥤 Cache refreshed" if ok else "⚠ Refresh failed — check DB connection"
     return _app_part(state), _form_part(state), msg
