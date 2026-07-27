@@ -115,10 +115,14 @@ def render_app_header(
                 ]),
             ]),
 
-            # Product line tabs. Landings is admin-only: the button is not rendered
-            # at all for anyone else (the app sets suppress_callback_exceptions, so
-            # switch_pl's Input on it is fine with the component absent). Hiding the
-            # tab is cosmetic — the real gate is server-side in switch_pl/render_ui.
+            # Product line tabs. Landings is admin-only, but the tab-landings button
+            # is ALWAYS mounted — merely hidden (display:none) for non-admins.
+            # switch_pl declares Input("tab-landings","n_clicks") alongside the
+            # Frames/Wearables inputs; if the component is absent, Dash aborts the
+            # whole callback with a ReferenceError when Frames/Wearables is clicked,
+            # so non-admins can't switch tabs at all. suppress_callback_exceptions
+            # does NOT cover a missing input on a callback that fires. The real gate
+            # is server-side (switch_pl / render_ui / save_landings); hiding is cosmetic.
             html.Div(className="field-group", children=[
                 html.Div("Product line", className="field-label"),
                 html.Div(className="pl-tabs", children=[
@@ -134,14 +138,14 @@ def render_app_header(
                         className=f"pl-tab{'  active' if current_pl == 'WEARABLES' and not on_landings else ''}",
                         n_clicks=0,
                     ),
-                ] + ([
                     html.Button(
                         "Landings",
                         id="tab-landings",
                         className=f"pl-tab{'  active' if on_landings else ''}",
                         n_clicks=0,
+                        style=None if is_admin else {"display": "none"},
                     ),
-                ] if is_admin else [])),
+                ]),
             ]),
         ]),
 
