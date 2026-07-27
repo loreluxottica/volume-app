@@ -261,6 +261,22 @@ def na_matrix(site: str, pl: str) -> dict[str, list[str]]:
     return NA_BY_SITE.get(site, {}).get(pl, {})
 
 
+# ── Editability invariants ────────────────────────────────────────────────────
+# Cells that MUST stay editable for a plant to do its job. A branch cut before a
+# main-only unlock (e.g. e16473b unlocked WHLS Net for Tijuana Wearables) can
+# silently re-lock these on merge — an omission no feature diff shows. Assert at
+# import so a stale N/A matrix fails fast on startup instead of in production.
+_MUST_BE_EDITABLE: list[tuple[str, str, str, str]] = [
+    ("TIJUANA", "WEARABLES", "actual", "whls_net"),   # e16473b
+]
+for _site, _pl, _row, _col in _MUST_BE_EDITABLE:
+    if _col in na_matrix(_site, _pl).get(_row, []):
+        raise AssertionError(
+            f"N/A matrix regression: {_col} is locked for {_site}/{_pl}/{_row} "
+            f"but must stay editable (see e16473b). A merge likely reverted it."
+        )
+
+
 # Deadline schedule — local time per site, per submission type
 DEADLINES: dict[str, dict[str, str]] = {
     "SEDICO":   {"py": "Thu 11:00", "siop": "Thu 11:00", "mon_frc": "Thu 11:00", "thu_frc": "Thu 11:00", "fri_frc": "Fri 15:00", "actual": "Next Mon 16:00", "eow_wip": "Next Mon 16:00", "wip_ot": "Next Mon 16:00"},
