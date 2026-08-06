@@ -100,6 +100,11 @@ NA_FRAMES_BY_SITE: dict[str, dict[str, list[str]]] = {
         "eow_wip": ["rop_samples", "whls_net"],
         "wip_ot":  ["rop_samples", "whls_net"],
     },
+    # POLAND currently enters Wearables only; every Frames cell is locked.
+    "POLAND": {
+        row_id: [col["id"] for col in COLS_FRAMES]
+        for row_id in ROW_IDS
+    },
     "ATLANTA": {
         "py":      ["rop_samples", "gvi", "ds_na", "sample"],
         "siop":    ["rop_samples", "whls_net", "gvi", "ds_na", "sample"],
@@ -156,6 +161,17 @@ NA_FRAMES_BY_SITE: dict[str, dict[str, list[str]]] = {
 # listing all 11 columns means the plant does not enter Wearables for that row.
 NA_WEARABLES_BY_SITE: dict[str, dict[str, list[str]]] = {
     "SEDICO": {
+        "py":      ["inb_gtk", "inb_tri", "rop_labs", "whls_gross", "whls_net", "retail", "ds_na", "ecom", "dummy", "repl_el", "meta"],
+        "siop":    ["inb_gtk", "inb_tri", "rop_labs", "whls_gross", "ds_na", "repl_el", "meta"],
+        "mon_frc": ["inb_gtk", "inb_tri", "rop_labs", "whls_gross", "ds_na", "repl_el", "meta"],
+        "thu_frc": ["inb_gtk", "inb_tri", "rop_labs", "whls_gross", "ds_na", "repl_el", "meta"],
+        "fri_frc": ["inb_gtk", "inb_tri", "rop_labs", "whls_gross", "ds_na", "repl_el", "meta"],
+        "actual":  ["inb_gtk", "inb_tri", "rop_labs", "whls_gross", "ds_na", "repl_el", "meta"],
+        "eow_wip": ["inb_gtk", "inb_tri", "rop_labs", "whls_gross", "ds_na", "repl_el", "meta"],
+        "wip_ot":  ["inb_gtk", "inb_tri", "rop_labs", "whls_gross", "ds_na", "repl_el", "meta"],
+    },
+    # Initial setup: same Wearables channel applicability as SEDICO.
+    "POLAND": {
         "py":      ["inb_gtk", "inb_tri", "rop_labs", "whls_gross", "whls_net", "retail", "ds_na", "ecom", "dummy", "repl_el", "meta"],
         "siop":    ["inb_gtk", "inb_tri", "rop_labs", "whls_gross", "ds_na", "repl_el", "meta"],
         "mon_frc": ["inb_gtk", "inb_tri", "rop_labs", "whls_gross", "ds_na", "repl_el", "meta"],
@@ -263,6 +279,7 @@ def na_matrix(site: str, pl: str) -> dict[str, list[str]]:
 # Deadline schedule — local time per site, per submission type
 DEADLINES: dict[str, dict[str, str]] = {
     "SEDICO":   {"py": "Thu 11:00", "siop": "Thu 11:00", "mon_frc": "Thu 11:00", "thu_frc": "Thu 11:00", "fri_frc": "Fri 15:00", "actual": "Next Mon 16:00", "eow_wip": "Next Mon 16:00", "wip_ot": "Next Mon 16:00"},
+    "POLAND":   {"py": "Thu 11:00", "siop": "Thu 11:00", "mon_frc": "Thu 11:00", "thu_frc": "Thu 11:00", "fri_frc": "Fri 15:00", "actual": "Next Mon 16:00", "eow_wip": "Next Mon 16:00", "wip_ot": "Next Mon 16:00"},
     "ATLANTA":  {"py": "Wed EOD",   "siop": "Wed EOD",   "mon_frc": "Wed EOD",   "thu_frc": "Wed EOD",   "fri_frc": "Fri 09:00", "actual": "Next Mon 10:00", "eow_wip": "Next Mon 10:00", "wip_ot": "Next Mon 10:00"},
     "TIJUANA":  {"py": "Wed EOD",   "siop": "Wed EOD",   "mon_frc": "Wed EOD",   "thu_frc": "Wed EOD",   "fri_frc": "Fri 09:00", "actual": "Next Mon 10:00", "eow_wip": "Next Mon 10:00", "wip_ot": "Next Mon 10:00"},
     "DONGGUAN": {"py": "Thu 18:00", "siop": "Thu 18:00", "mon_frc": "Thu 18:00", "thu_frc": "Thu 18:00", "fri_frc": "Fri EOD",   "actual": "Next Mon 18:00", "eow_wip": "Next Mon 18:00", "wip_ot": "Next Mon 18:00"},
@@ -273,6 +290,7 @@ DEADLINES: dict[str, dict[str, str]] = {
 # Per-(site, product line) deadline overrides — applied on top of DEADLINES.
 DEADLINE_OVERRIDES: dict[tuple[str, str], dict[str, str]] = {
     ("SEDICO", "WEARABLES"): {"mon_frc": "Tue 18:00"},
+    ("POLAND", "WEARABLES"): {"mon_frc": "Tue 18:00"},
 }
 
 
